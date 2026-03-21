@@ -1,11 +1,8 @@
-//#![allow(unused)]
+#![allow(unused)]
 use std::collections::HashMap;
 use std::io::{Error, Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::sync::{
-    mpsc::{self, Sender},
-    Arc, Mutex,
-};
+use std::net::TcpListener;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 fn main() -> Result<(), Error> {
@@ -13,73 +10,35 @@ fn main() -> Result<(), Error> {
     const PORT: &str = "7878";
 
     let listener = TcpListener::bind([IP_ADDR, PORT].join(":"))?;
-    let mut _messages: Arc<Mutex<Vec<String>>> = Default::default();
-    let clients: Arc<Mutex<HashMap<u8, TcpStream>>> = Default::default();
-    // TODO when making the client into a different program, i can't use mpsc
-    // so push to messages variable ?
-    // let's try that (don't depend on mpsc)
-    let (tx, rx) = mpsc::channel::<HashMap<u8, String>>();
+    let messages: Arc<Mutex<Vec<String>>> = Default::default();
 
-    let cloned_clients = Arc::clone(&clients);
-    let _cloned_messages = Arc::clone(&_messages);
-    let _server = thread::spawn(move || {
-        loop {
-            let hashed_msg = rx.recv().expect("the sender should always be connected");
-
-            for client in cloned_clients.lock().unwrap().iter_mut() {
-                for client_name in hashed_msg.keys() {
-                    if client_name != client.0 {
-                        // NOTE if the user didn't complete his text, the receive message gonna append on that message
-                        //(i think tui gonna fix that)
-                        let _ = client
-                            .1
-                            .write_all(hashed_msg.get(client_name).unwrap().as_bytes());
-                    }
-                }
-            }
-        }
-    });
-    let mut id: u8 = 0;
+    let mut connecters = 0;
+    // i don't know exaclty how this for loop is working
+    // lazy for loop ?, only happend once ?
     for stream in listener.incoming() {
         let mut stream = stream?;
-        id += 1;
+        let cloned_messages = Arc::clone(&messages);
 
-        clients
-            .lock()
-            .unwrap()
-            .insert(id, stream.try_clone().unwrap());
-        let tx = tx.clone();
-
-        let _client = thread::spawn(move || -> Result<(), Error> {
-            let _ = handle_client(id, &mut stream, tx);
-            Ok(())
+        thread::spawn(move || {
+            loop {
+                dbg!(&stream);
+                let mut raw_message = [0; 1024];
+                let bytes_readed = stream.read(&mut raw_message).unwrap();
+                let message: String = str::from_utf8(&raw_message[..bytes_readed])
+                    .unwrap_or("")
+                    .to_string();
+                dbg!(&message);
+                //TODO this gonna write to the clinet that write that message ?, i don't want that
+                cloned_messages.lock().unwrap().push(message.clone());
+                dbg!(&cloned_messages);
+                //let _ = stream.write_all(message.as_bytes());
+            }
         });
+
+        connecters += 1;
+        println!("number of connected clients: {connecters}");
     }
     Ok(())
-}
-fn handle_client(
-    id: u8,
-    stream: &mut TcpStream,
-    tx: Sender<HashMap<u8, String>>,
-) -> Result<(), Error> {
-    loop {
-        let mut raw_message = [0; 1024];
-        let bytes_readed = stream.read(&mut raw_message)?;
-        let message: String = str::from_utf8(&raw_message[..bytes_readed])
-            .unwrap_or("")
-            .to_string();
-
-        // NOTE /quit will not disable reading from input, but i can't send messaages (i can receive them),
-        //this happend because i am storing streams on a container and didn't not free them
-        //TODO do parsing, like when the string is empty, i don't want to append it to my HashMap
-        if message.trim() == "/quit" {
-            break Ok(());
-        } else {
-            let hashed_message = HashMap::from([(id, message)]);
-            tx.send(hashed_message.clone())
-                .expect("the receiver should always be connected");
-        }
-    }
 }
 
 /*
@@ -96,6 +55,11 @@ mod test {
     #[test]
     #[allow(non_snake_case)]
     fn concatenate_Strings() {
+        let mut data = String::new();
+        let data_2 = &data;
+        let data_3 = &mut data;
+        *data_3 = String::from("hello world");
+        //dbg!(&data_2);
         let s1 = String::from("Hello, ");
         let s2 = String::from("World");
         let s3 = s1 + &s2;
