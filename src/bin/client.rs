@@ -23,13 +23,12 @@ fn main() {
             thread::scope(|service| {
                 // received messages from other clients
                 service.spawn(|| {
-                    //thread::sleep(Duration::from_secs(3));
-                    //let mut raw_message = [0; 1024];
-                    //let bytes_readed = cloned_stream.read(&mut raw_message).unwrap();
-                    //let message: String = str::from_utf8(&raw_message[..bytes_readed])
-                    //    .unwrap()
-                    //    .to_string();
-                    //print!("server send : {message}");
+                    let mut raw_message = [0; 1024];
+                    let bytes_readed = cloned_stream.read(&mut raw_message).unwrap();
+                    let message: String = str::from_utf8(&raw_message[..bytes_readed])
+                        .unwrap()
+                        .to_string();
+                    print!("server send : {message}");
                 });
 
                 // send messages to server
@@ -44,8 +43,9 @@ fn main() {
                         .trim()
                         .to_string()
                         .add(&sufx_msg);
-                    dbg!(&message);
                     let _ = stream.write_all(message.as_bytes());
+
+                    //dbg!(&message);
                 });
             });
         }

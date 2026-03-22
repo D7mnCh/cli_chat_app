@@ -1,7 +1,7 @@
 #![allow(unused)]
 use std::collections::HashMap;
 use std::io::{Error, Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -11,27 +11,37 @@ fn main() -> Result<(), Error> {
 
     let listener = TcpListener::bind([IP_ADDR, PORT].join(":"))?;
     let messages: Arc<Mutex<Vec<String>>> = Default::default();
+    let clients: Arc<Mutex<Vec<TcpStream>>> = Default::default();
 
     let mut connecters = 0;
-    // i don't know exaclty how this for loop is working
-    // lazy for loop ?, only happend once ?
+    // this for loop is wierd, only iterate on the first element once
+    // NOTE i might need other thread for writing to clients
+    //let _broadcaster = thread::spawn(|| {});
     for stream in listener.incoming() {
         let mut stream = stream?;
         let cloned_messages = Arc::clone(&messages);
+        let cloned_clients = Arc::clone(&clients);
+        clients
+            .try_lock()
+            .unwrap()
+            .push(stream.try_clone().unwrap());
 
         thread::spawn(move || {
             loop {
-                dbg!(&stream);
                 let mut raw_message = [0; 1024];
                 let bytes_readed = stream.read(&mut raw_message).unwrap();
                 let message: String = str::from_utf8(&raw_message[..bytes_readed])
                     .unwrap_or("")
                     .to_string();
-                dbg!(&message);
-                //TODO this gonna write to the clinet that write that message ?, i don't want that
                 cloned_messages.lock().unwrap().push(message.clone());
+
+                for client in cloned_clients.try_lock().unwrap().iter_mut() {
+                    let _ = client.write_all(message.as_bytes());
+                }
+
+                //dbg!(&stream);
+                //dbg!(&message);
                 dbg!(&cloned_messages);
-                //let _ = stream.write_all(message.as_bytes());
             }
         });
 
@@ -43,8 +53,7 @@ fn main() -> Result<(), Error> {
 
 /*
 TODO
-add an Id beside the name with a touple to fix when clients have the same name
-make clients program instead of having one program
+clients can receive messages from each other
 make the app with cli using ratatui -> https://ratatui.rs/tutorials/
 
 NOTE
