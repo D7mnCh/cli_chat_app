@@ -1,9 +1,24 @@
 #![allow(unused)]
-use std::collections::HashMap;
-use std::io::{Error, Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::sync::{Arc, Mutex};
-use std::thread;
+use cli_chat_app::utils::parsing;
+use std::{
+    collections::HashMap,
+    io::{Error, Read, Write},
+    net::{TcpListener, TcpStream},
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
+};
+
+fn get_client_name(stream: &mut TcpStream) -> String {
+    let mut raw_message = [0; 1024];
+    let bytes_readed = stream.read(&mut raw_message).unwrap();
+    let message: String = str::from_utf8(&raw_message[..bytes_readed])
+        .unwrap()
+        .trim()
+        .to_string();
+    let name = message;
+    name
+}
 
 fn main() -> Result<(), Error> {
     const IP_ADDR: &str = "127.0.0.1";
@@ -11,32 +26,41 @@ fn main() -> Result<(), Error> {
 
     let listener = TcpListener::bind([IP_ADDR, PORT].join(":"))?;
     let messages: Arc<Mutex<Vec<String>>> = Default::default();
-    let clients: Arc<Mutex<Vec<TcpStream>>> = Default::default();
+    let clients: Arc<Mutex<HashMap<String, TcpStream>>> = Default::default();
 
     let mut connecters = 0;
     // this for loop is wierd, only iterate on the first element once
-    // NOTE i might need other thread for writing to clients
     //let _broadcaster = thread::spawn(|| {});
     for stream in listener.incoming() {
         let mut stream = stream?;
         let cloned_messages = Arc::clone(&messages);
         let cloned_clients = Arc::clone(&clients);
+
+        let name = get_client_name(&mut stream);
         clients
             .try_lock()
             .unwrap()
-            .push(stream.try_clone().unwrap());
+            .insert(name, stream.try_clone().unwrap());
 
         thread::spawn(move || {
             loop {
                 let mut raw_message = [0; 1024];
                 let bytes_readed = stream.read(&mut raw_message).unwrap();
-                let message: String = str::from_utf8(&raw_message[..bytes_readed])
-                    .unwrap_or("")
+                let detailed_message: String = str::from_utf8(&raw_message[..bytes_readed])
+                    .unwrap()
                     .to_string();
-                cloned_messages.lock().unwrap().push(message.clone());
+                cloned_messages
+                    .lock()
+                    .unwrap()
+                    .push(detailed_message.clone());
+                // parse msg here ?
 
                 for client in cloned_clients.try_lock().unwrap().iter_mut() {
-                    let _ = client.write_all(message.as_bytes());
+                    let (name, mut msg) = parsing(&detailed_message.clone());
+                    if name != *client.0 {
+                        dbg!(&msg);
+                        let _ = client.1.write_all(detailed_message.as_bytes());
+                    }
                 }
 
                 //dbg!(&stream);
@@ -53,7 +77,7 @@ fn main() -> Result<(), Error> {
 
 /*
 TODO
-clients can receive messages from each other
+bind server to wifi, and bind clients to
 make the app with cli using ratatui -> https://ratatui.rs/tutorials/
 
 NOTE
