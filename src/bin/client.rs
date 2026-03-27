@@ -3,6 +3,7 @@ use std::{
     io::{self, BufRead, BufReader, Error, Read, Stdout, Write},
     net::TcpStream,
     ops::Add,
+    sync::{Arc, Mutex},
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -19,45 +20,68 @@ fn get_client_name(stream: &mut TcpStream) -> String {
 }
 
 fn main() {
-    if let Ok(mut stream) = TcpStream::connect("127.0.0.1:7878") {
+    // what is an IP addr exactly
+    const IP_ADDR: &str = "192.168.100.3";
+    const PORT: &str = "7878";
+
+    if let Ok(mut stream) = TcpStream::connect([IP_ADDR, PORT].join(":")) {
         let mut cloned_stream = stream.try_clone().unwrap();
         let name = get_client_name(&mut stream);
         let mut threads: Vec<JoinHandle<_>> = Vec::new();
+
+        // NOTE i think i will make third thread to check if server is disconnected on every sec, and i will use
+        //process::exit(0) or something
+        let is_server_disconnected: Arc<Mutex<bool>> = Default::default();
+        let cloned_is_server_disconnected = Arc::clone(&is_server_disconnected);
 
         let received_client_msgs_thread_handler = thread::spawn(move || {
             loop {
                 let mut raw_message = [0; 1024];
                 // NOTE this will block because i can't send to myself so it keep wataing server to send him some msg
-                let bytes_readed = cloned_stream.read(&mut raw_message).unwrap();
-                let message: String = str::from_utf8(&raw_message[..bytes_readed])
-                    .unwrap()
-                    .to_string();
+                match cloned_stream.read(&mut raw_message) {
+                    Ok(0) => {
+                        *cloned_is_server_disconnected.lock().unwrap() = true;
+                        break;
+                    }
+                    Ok(bytes_readed) => {
+                        let message: String = str::from_utf8(&raw_message[..bytes_readed])
+                            .unwrap()
+                            .trim()
+                            .to_string();
 
-                // parse msg and show which one send the msg
-                let (name, msg) = parsing(&message);
-                print!("{name}: {msg}");
-                //dbg!(&message);
+                        // parse msg and show which one send the msg
+                        let (name, msg) = parsing(&message);
+                        print!("{name}: {msg}");
+                        //dbg!(&message);
+                    }
+                    _ => todo!(),
+                }
             }
         });
+        // NOTE if the server crash, i need also to end reading from stdin
         threads.push(received_client_msgs_thread_handler);
-        // send messages to server
-        // if server send message, don't make reading from stdin suspend this program
         let send_msg_to_server_thread_handler = thread::spawn(move || {
             loop {
-                let mut raw_message = [0; 1024];
-                let separator = ":";
-                let sufx_msg = format!("{}{}", separator, name);
+                if *is_server_disconnected.lock().unwrap() == false {
+                    let mut raw_message = [0; 1024];
+                    let separator = ":";
+                    let sufx_msg = format!("{}{}", separator, name);
 
-                // NOTE it will get suspend because of this read from stdin, i am using scope threads
-                let bytes_readed = io::stdin().read(&mut raw_message).unwrap();
-                let detailed_message: String = str::from_utf8(&raw_message[..bytes_readed])
-                    .unwrap_or("")
-                    .to_string()
-                    .add(&sufx_msg);
-                let _ = stream.write_all(detailed_message.as_bytes());
+                    let bytes_readed = io::stdin().read(&mut raw_message).unwrap();
+                    let client_message = str::from_utf8(&raw_message[..bytes_readed])
+                        .unwrap()
+                        .to_string();
 
-                //dbg!(&detailed_message);
-                //dbg!(&message);
+                    if !client_message.trim().is_empty() {
+                        let detailed_message = client_message.add(&sufx_msg);
+                        let _ = stream.write_all(detailed_message.as_bytes());
+                    }
+
+                    //dbg!(&detailed_message);
+                    //dbg!(&message);
+                } else {
+                    break;
+                }
             }
         });
         threads.push(send_msg_to_server_thread_handler);
