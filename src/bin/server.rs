@@ -21,7 +21,8 @@ fn get_client_name(stream: &mut TcpStream) -> String {
 }
 
 fn main() -> Result<(), Error> {
-    const IP_ADDR: &str = "192.168.100.3";
+    // accept connections outside my machine
+    const IP_ADDR: &str = "0.0.0.0";
     const PORT: &str = "7878";
 
     let listener = TcpListener::bind([IP_ADDR, PORT].join(":"))?;
@@ -36,18 +37,25 @@ fn main() -> Result<(), Error> {
         let cloned_clients = Arc::clone(&clients);
 
         let name = get_client_name(&mut stream);
+
+        println!("{name} has connected");
+
         clients
             .try_lock()
             .unwrap()
-            .insert(name, stream.try_clone().unwrap());
+            .insert(name.clone(), stream.try_clone().unwrap());
 
         // NOTE maybe it's time to introduce some of enums
         thread::spawn(move || {
             loop {
                 let mut raw_message = [0; 1024];
                 match stream.read(&mut raw_message) {
-                    // if client program crush (it will send 0 bytes as a result), then break loop
-                    Ok(0) => break,
+                    // if client program crush (it will send 0 byte as a result), if
+                    // yes then break his stream loop
+                    Ok(0) => {
+                        println!("{name} has disconnected");
+                        break;
+                    }
                     Ok(bytes_readed) => {
                         let detailed_message: String = str::from_utf8(&raw_message[..bytes_readed])
                             .unwrap()
@@ -57,8 +65,8 @@ fn main() -> Result<(), Error> {
 
                         //TODO maybe make make parsing return enums of commands ?
                         if msg.trim() == String::from("/quit") {
-                            // TODO didn't fix if client's program just crush, the stream didn't get shutdown !
                             stream.shutdown(Both).unwrap();
+                            println!("{name} has disconnected");
                             break;
                         }
 
@@ -70,36 +78,38 @@ fn main() -> Result<(), Error> {
 
                             for client in cloned_clients.try_lock().unwrap().iter_mut() {
                                 if name != *client.0 {
-                                    dbg!(&msg);
+                                    dbg!(&cloned_messages);
                                     let _ = client.1.write_all(detailed_message.as_bytes());
                                 }
                             }
 
                             //dbg!(&stream);
                             //dbg!(&message);
-                            dbg!(&cloned_messages);
+                            //dbg!(&cloned_messages);
                         }
                     }
                     _ => todo!(),
                 }
             }
         });
+        //println!("{name} has disconnected");
     }
     Ok(())
 }
 
 /*
 TODO
-use rust features to increase readablity
-do error handling
+- use rust features to increase readablity
+- do error handling (i don't know about that), i think i'll make llm  review my code
 
-the big boss for now:
+- the big boss for now:
     - bind server to wifi, and let client on the same wifi connect to that server
     - need search on how to do that (safely, for now ?)
-make the app with cli using ratatui -> https://ratatui.rs/tutorials/
+
+- make the app with cli using ratatui -> https://ratatui.rs/tutorials/
 
 NOTE
-- i think it's better to make if let instead of spaming unwrap()
+- i think it's better to make if let instead of spamming unwrap()
 */
 #[cfg(test)]
 mod test {
