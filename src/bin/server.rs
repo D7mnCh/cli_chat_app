@@ -2,111 +2,135 @@
 use cli_chat_app::utils::parsing;
 use std::{
     collections::HashMap,
+    default,
     io::{Error, Read, Write},
-    net::{Shutdown::Both, TcpListener, TcpStream},
+    net::{IpAddr, Ipv4Addr, Shutdown::Both, SocketAddr, TcpListener, TcpStream},
     sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
 
-fn get_client_name(stream: &mut TcpStream) -> String {
-    let mut raw_message = [0; 1024];
-    let bytes_readed = stream.read(&mut raw_message).unwrap();
-    let message: String = str::from_utf8(&raw_message[..bytes_readed])
-        .unwrap()
-        .trim()
-        .to_string();
-    let name = message;
-    name
+struct Server {
+    addr: SocketAddr,
+    listener: Option<TcpListener>,
+    messages: Arc<Mutex<Vec<String>>>,
+    clients: Arc<Mutex<HashMap<String, TcpStream>>>,
 }
+impl Server {
+    fn new() -> Self {
+        Self {
+            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 7878),
+            listener: None,
+            messages: Default::default(),
+            clients: Default::default(),
+        }
+    }
 
-fn main() -> Result<(), Error> {
-    // accept connections outside my machine
-    const IP_ADDR: &str = "0.0.0.0";
-    const PORT: &str = "7878";
+    fn bind_addr(&mut self) {
+        self.listener = Some(TcpListener::bind(self.addr).unwrap());
+    }
 
-    let listener = TcpListener::bind([IP_ADDR, PORT].join(":"))?;
-    let messages: Arc<Mutex<Vec<String>>> = Default::default();
-    let clients: Arc<Mutex<HashMap<String, TcpStream>>> = Default::default();
+    fn run(&mut self) {
+        if let Some(listener) = &mut self.listener {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                let cloned_messages = Arc::clone(&self.messages);
+                let cloned_clients = Arc::clone(&self.clients);
 
-    // this for loop is wierd, only iterate on the first element once
-    //let _broadcaster = thread::spawn(|| {});
-    for stream in listener.incoming() {
-        let mut stream = stream?;
-        let cloned_messages = Arc::clone(&messages);
-        let cloned_clients = Arc::clone(&clients);
+                let name = Server::get_client_name(&mut stream);
+                self.clients
+                    .try_lock()
+                    .unwrap()
+                    .insert(name.clone(), stream.try_clone().unwrap());
+                println!("{name} has connected");
 
-        let name = get_client_name(&mut stream);
+                Server::send_message_history(&mut stream, &mut cloned_messages.lock().unwrap());
 
-        println!("{name} has connected");
+                // NOTE maybe it's time to introduce some of enums
+                thread::spawn(move || {
+                    loop {
+                        let mut raw_message = [0; 1024];
+                        match stream.read(&mut raw_message) {
+                            // if client program crush (it will send 0 byte as a result), if
+                            // yes then break his stream loop
+                            Ok(0) => {
+                                println!("{name} has disconnected");
+                                break;
+                            }
+                            Ok(bytes_readed) => {
+                                let detailed_message: String =
+                                    str::from_utf8(&raw_message[..bytes_readed])
+                                        .unwrap()
+                                        .to_string();
 
-        clients
-            .try_lock()
-            .unwrap()
-            .insert(name.clone(), stream.try_clone().unwrap());
+                                let (name, mut msg) = parsing(&detailed_message.clone());
 
-        // NOTE maybe it's time to introduce some of enums
-        thread::spawn(move || {
-            loop {
-                let mut raw_message = [0; 1024];
-                match stream.read(&mut raw_message) {
-                    // if client program crush (it will send 0 byte as a result), if
-                    // yes then break his stream loop
-                    Ok(0) => {
-                        println!("{name} has disconnected");
-                        break;
-                    }
-                    Ok(bytes_readed) => {
-                        let detailed_message: String = str::from_utf8(&raw_message[..bytes_readed])
-                            .unwrap()
-                            .to_string();
+                                if !msg.is_empty() {
+                                    cloned_messages
+                                        .lock()
+                                        .unwrap()
+                                        .push(detailed_message.clone());
 
-                        let (name, mut msg) = parsing(&detailed_message.clone());
+                                    for client in cloned_clients.try_lock().unwrap().iter_mut() {
+                                        if name != *client.0 {
+                                            //dbg!(&cloned_messages);
+                                            let _ = client.1.write_all(detailed_message.as_bytes());
+                                        }
+                                    }
 
-                        //TODO maybe make make parsing return enums of commands ?
-                        if msg.trim() == String::from("/quit") {
-                            stream.shutdown(Both).unwrap();
-                            println!("{name} has disconnected");
-                            break;
-                        }
-
-                        if !msg.is_empty() {
-                            cloned_messages
-                                .lock()
-                                .unwrap()
-                                .push(detailed_message.clone());
-
-                            for client in cloned_clients.try_lock().unwrap().iter_mut() {
-                                if name != *client.0 {
+                                    //dbg!(&cloned_clients);
+                                    //dbg!(&stream);
+                                    //dbg!(&message);
                                     dbg!(&cloned_messages);
-                                    let _ = client.1.write_all(detailed_message.as_bytes());
                                 }
                             }
-
-                            //dbg!(&stream);
-                            //dbg!(&message);
-                            //dbg!(&cloned_messages);
+                            Err(e) => println!("{e}"),
                         }
                     }
-                    _ => todo!(),
-                }
+                });
             }
-        });
-        //println!("{name} has disconnected");
+        }
     }
-    Ok(())
+    fn get_client_name(stream: &mut TcpStream) -> String {
+        let mut raw_message = [0; 1024];
+        let bytes_readed = stream.read(&mut raw_message).unwrap();
+        let detailed_message: String = str::from_utf8(&raw_message[..bytes_readed])
+            .unwrap()
+            .trim()
+            .to_string();
+
+        let name = detailed_message;
+        name
+    }
+
+    fn send_message_history(stream: &mut TcpStream, messages: &mut Vec<String>) {
+        if messages.is_empty() {
+            return;
+        } else {
+            for detailed_msg in messages.iter() {
+                // if not sleep the msg will get connected into large string on client side while parsing
+                thread::sleep(Duration::from_millis(10));
+                let _ = stream.write_all(detailed_msg.as_bytes());
+            }
+        }
+    }
+}
+
+fn main() {
+    let mut server = Server::new();
+    server.bind_addr();
+    server.run();
 }
 
 /*
 TODO
+- make server in oop stye
 - use rust features to increase readablity
 - do error handling (i don't know about that), i think i'll make llm  review my code
 
 - the big boss for now:
-    - bind server to wifi, and let client on the same wifi connect to that server
-    - need search on how to do that (safely, for now ?)
-
-- make the app with cli using ratatui -> https://ratatui.rs/tutorials/
+    - bind server to wifi, and let client on the same wifi connect to that server,
+    need search on how to do that (safely, for now ?)
 
 NOTE
 - i think it's better to make if let instead of spamming unwrap()

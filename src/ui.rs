@@ -1,89 +1,81 @@
-use std::io::Error;
-
-use crossterm::event::{self, KeyCode, KeyEventKind};
 use ratatui::layout::{Constraint, Layout, Position};
-use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, List, ListItem, Paragraph};
-use ratatui::{DefaultTerminal, Frame};
+use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
+use ratatui::Frame;
 
-fn main() {
-    let _ = ratatui::run(|terminal| App::new().run(terminal));
-}
-
-/// App holds the state of the application
-struct App {
-    /// Current value of the input box
-    input: String,
+#[derive(Default)]
+pub struct Ui {
+    pub input: String,
+    pub input_mode: InputMode,
     /// Position of cursor in the editor area.
     character_index: usize,
-    /// Current input mode
-    input_mode: InputMode,
-    /// History of recorded messages
-    messages: Vec<String>,
+    messages_state: ListState,
 }
-
-enum InputMode {
+#[derive(Default)]
+pub enum InputMode {
+    #[default]
     Normal,
     Editing,
 }
 
-impl App {
-    const fn new() -> Self {
+impl Ui {
+    pub fn new() -> Self {
         Self {
             input: String::new(),
             input_mode: InputMode::Normal,
-            messages: Vec::new(),
             character_index: 0,
+            messages_state: ListState::default(),
         }
     }
 
     // NOTE saturating methods to prevent overflow
 
-    fn move_cursor_left(&mut self) {
+    pub fn move_cursor_left(&mut self) {
         let cursor_moved_left = self.character_index.saturating_sub(1);
         self.character_index = self.clamp_cursor(cursor_moved_left);
     }
 
-    fn move_cursor_right(&mut self) {
+    pub fn move_cursor_right(&mut self) {
         let cursor_moved_right = self.character_index.saturating_add(1);
         self.character_index = self.clamp_cursor(cursor_moved_right);
     }
 
     // NOTE the pos of the new character is based on the string
-    fn enter_char(&mut self, new_char: char) {
-        let index = self.byte_index();
-        self.input.insert(index, new_char);
-        self.move_cursor_right();
+    pub fn enter_char(&mut self, new_char: char) {
+        if self.character_index < 30 {
+            let index = self.byte_index();
+            self.input.insert(index, new_char);
+            self.move_cursor_right();
+        }
     }
 
-    // returns character index
+    // returns the index of a current cursor pos
     fn byte_index(&self) -> usize {
         self.input
             .char_indices()
             .map(|(i, _)| i)
             .nth(self.character_index)
+            // need if n is greater or equal string
             .unwrap_or(self.input.len())
     }
 
     // NOTE didn't read this
-    fn delete_char(&mut self) {
+    pub fn delete_char(&mut self) {
         let cursor_not_left_most = self.character_index != 0;
         if cursor_not_left_most {
-            // Method "remove" is not used on the saved text for deleting the selected char.
-            // Reason: Using remove on String works on bytes instead of the chars.
-            // Using remove would require special care because of char boundaries.
+            // NOTE i waanna try to use remove's string method instead of iterators
 
             let current_index = self.character_index;
-            let from_left_to_current_index = current_index - 1;
+            let chars_before_del_char: usize = current_index - 1;
+            let chars_after_del_char: usize = current_index;
 
             // Getting all characters before the selected character.
-            let before_char_to_delete = self.input.chars().take(from_left_to_current_index);
+            let before_char_to_delete = self.input.chars().take(chars_before_del_char);
             // getting all characters after selected character.
-            let after_char_to_delete = self.input.chars().skip(current_index);
+            let after_char_to_delete = self.input.chars().skip(chars_after_del_char);
 
             // Put all characters together except the selected one.
-            // By leaving the selected one out, it is forgotten and therefore deleted.
             self.input = before_char_to_delete.chain(after_char_to_delete).collect();
             self.move_cursor_left();
         }
@@ -99,42 +91,42 @@ impl App {
         self.character_index = 0;
     }
 
-    fn submit_message(&mut self) {
-        self.messages.push(self.input.clone());
-        self.input.clear();
+    pub fn scroll_down(&mut self, messages_len: usize) {
+        let i = match self.messages_state.selected() {
+            Some(i) => {
+                if i >= messages_len.saturating_sub(1) {
+                    messages_len.saturating_sub(1)
+                } else {
+                    i + 1
+                }
+            }
+            None => 0,
+        };
+
+        self.messages_state.select(Some(i));
+    }
+
+    pub fn scroll_up(&mut self) {
+        let i = match self.messages_state.selected() {
+            Some(i) => i.saturating_sub(1),
+            None => 0,
+        };
+
+        self.messages_state.select(Some(i));
+    }
+    pub fn select_last_message(&mut self, messages: &mut Vec<String>) {
+        self.messages_state
+            .select(Some(messages.len().saturating_sub(1)));
+    }
+
+    pub fn submit_message(&mut self, client_name: &String, messages: &mut Vec<String>) {
+        let detailed_msg = format!("{}: {}", client_name, self.input);
+        messages.push(detailed_msg);
         self.reset_cursor();
     }
 
-    fn run(mut self, terminal: &mut DefaultTerminal) -> Result<(), Error> {
-        loop {
-            terminal.draw(|frame| self.render(frame))?;
-
-            if let Some(key) = event::read()?.as_key_press_event() {
-                match self.input_mode {
-                    InputMode::Normal => match key.code {
-                        KeyCode::Char('e') => {
-                            self.input_mode = InputMode::Editing;
-                        }
-                        KeyCode::Char('q') => {
-                            return Ok(());
-                        }
-                        _ => {}
-                    },
-                    InputMode::Editing => match key.code {
-                        KeyCode::Enter => self.submit_message(),
-                        KeyCode::Char(to_insert) => self.enter_char(to_insert),
-                        KeyCode::Backspace => self.delete_char(),
-                        KeyCode::Left => self.move_cursor_left(),
-                        KeyCode::Right => self.move_cursor_right(),
-                        KeyCode::Esc => self.input_mode = InputMode::Normal,
-                        _ => {}
-                    },
-                }
-            }
-        }
-    }
-
-    fn render(&self, frame: &mut Frame) {
+    // NOTE i should leanrn about ratatui
+    pub fn render(&self, frame: &mut Frame, messages: &[String]) {
         let layout = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(3),
@@ -142,19 +134,14 @@ impl App {
         ]);
         let [help_area, input_area, messages_area] = frame.area().layout(&layout);
 
+        // helping area things
         let (msg, style) = match self.input_mode {
             InputMode::Normal => (
                 vec!["Press q to exit, e to start editing.".into()],
-                Style::default().add_modifier(Modifier::RAPID_BLINK),
+                Style::default(),
             ),
             InputMode::Editing => (
-                vec![
-                    "Press ".into(),
-                    "Esc".bold(),
-                    " to stop editing, ".into(),
-                    "Enter".bold(),
-                    " to record the message".into(),
-                ],
+                vec!["Press Esc to stop editing, Enter to record the message".into()],
                 Style::default(),
             ),
         };
@@ -162,6 +149,7 @@ impl App {
         let help_message = Paragraph::new(text);
         frame.render_widget(help_message, help_area);
 
+        // input area
         let input = Paragraph::new(self.input.as_str())
             .style(match self.input_mode {
                 InputMode::Normal => Style::default(),
@@ -185,28 +173,17 @@ impl App {
             )),
         }
 
-        let messages: Vec<ListItem> = self
-            .messages
+        // messages area
+        let messages: Vec<ListItem> = messages
             .iter()
-            .enumerate()
-            .map(|(i, m)| {
-                let content = Line::from(Span::raw(format!("{i}: {m}")));
+            .map(|msgs| {
+                let content = Line::from(Span::raw(format!("{}", msgs)));
                 ListItem::new(content)
             })
             .collect();
         let messages = List::new(messages).block(Block::bordered().title("Messages"));
-        frame.render_widget(messages, messages_area);
+        frame.render_stateful_widget(messages, messages_area, &mut self.messages_state.clone());
     }
 }
 #[cfg(test)]
-mod test {
-    #[test]
-    fn skip_method() {
-        let a = [1, 2, 3];
-
-        let mut iter = a.into_iter().skip(1);
-
-        assert_eq!(iter.next(), Some(3));
-        assert_eq!(iter.next(), None);
-    }
-}
+mod test {}
