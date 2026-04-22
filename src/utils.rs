@@ -1,15 +1,15 @@
-// NOTE maybe let parsing return enums comands varients
-pub fn parsing(detailed_msg: &String) -> (String, String) {
-    if !detailed_msg.is_empty() {
-        let detailed_msg: Vec<&str> = detailed_msg.split(':').collect();
+pub enum NameHandling {
+    Empty,
+    Reserved,
+    Valid,
+}
 
-        if let [msg, name] = detailed_msg[..] {
-            //dbg!(&msg); dbg!(&name);
-            return ((String::from(name)), String::from(msg));
-        } else {
-            unreachable!();
-        }
+pub fn parsing_name(name: &str) -> NameHandling {
+    if name.is_empty() {
+        return NameHandling::Empty;
+    } else if name == "Server" || name == "server" {
+        return NameHandling::Reserved;
     } else {
-        return ((String::new()), (String::new()));
+        return NameHandling::Valid;
     }
 }
