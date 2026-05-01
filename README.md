@@ -11,3 +11,13 @@
 - pub keyword found it usefull, if i didn't found it beside method definition, it means i only use that method on associated struct
 - if you wanna use continue or break keywords in other function rather tehn the current one, you can do other method by letting that function that don't have the keywords containe the logic and return an enum of dicisions to let know the caller (loop function) what she should do! 
 - user input should ui struct handle it
+- don't make multiple sources of truth, only one
+- use mpsc (channels) for events (enums), notifiction, one time used (between threads), (can't modify data with it)
+- use `Arc<Mutex<...>>` when the shared data is updated continuously (between threads)
+- server job is judging, client can only react (i don't quite understand that)
+- don't use sleep on networking?
+- they must be only one reader on boht client and server side or it will be race condtion on the message between threads
+- good structured code make adding features why easier(i implement multiple readers on both client and server -.-, and that leads to code mess like a reader take packets of another reader, the same parsing implemented over and over again)
+- logging on every thing i do make debbuging less painful
+- you need code review 
+- i don't really know when to make a blank line
