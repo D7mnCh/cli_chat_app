@@ -1,10 +1,9 @@
-use ratatui::layout::{Constraint, Layout, Position};
-use ratatui::style::{Color, Style};
+use crate::app::NameValidation;
+use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
+use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use ratatui::Frame;
-
-use crate::utils::NameHandling;
 
 pub enum InputMode {
     Normal,
@@ -28,7 +27,7 @@ pub enum Logging {
 pub struct Ui {
     pub input: Input,
     pub input_state: InputState,
-    messages_state: ListState,
+    pub vertical_scrolling: ScrollbarState,
 }
 pub struct Input {
     pub buffer: String,
@@ -107,60 +106,52 @@ impl Ui {
                 character_index: 0,
             },
             input_state: InputState::EnterName,
-            messages_state: ListState::default(),
+            vertical_scrolling: ScrollbarState::new(0),
         }
     }
 
     // saturating methods to prevent overflow
 
-    pub fn scroll_down(&mut self, messages_len: usize) {
-        let i = match self.messages_state.selected() {
-            Some(i) => {
-                if i >= messages_len.saturating_sub(1) {
-                    messages_len.saturating_sub(1)
-                } else {
-                    i + 1
-                }
-            }
-            None => 0,
-        };
+    fn render_vertical_scrollbar(&mut self, frame: &mut Frame, area: Rect, messages: &Vec<String>) {
+        // store last pos cuz when creating a new scrollbarState it will reset the pos
+        let last_pos = self.vertical_scrolling.get_position();
+        self.vertical_scrolling = ScrollbarState::new(messages.len());
+        self.vertical_scrolling = self.vertical_scrolling.position(last_pos);
 
-        self.messages_state.select(Some(i));
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+        frame.render_stateful_widget(
+            scrollbar,
+            area.inner(Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            &mut self.vertical_scrolling,
+        );
     }
 
-    pub fn scroll_up(&mut self) {
-        let i = match self.messages_state.selected() {
-            Some(i) => i.saturating_sub(1),
-            None => 0,
-        };
-
-        self.messages_state.select(Some(i));
-    }
-
-    pub fn select_last_message(&mut self, messages: &Vec<String>) {
-        self.messages_state
-            .select(Some(messages.len().saturating_sub(1)));
-    }
-
-    // NOTE i am thinking of adding like messages, if an error message pop out, make it there
-    pub fn name_err_msg<'a>(state: NameHandling) -> Option<Paragraph<'a>> {
+    pub fn name_err_msg<'a>(state: NameValidation) -> Option<Paragraph<'a>> {
         match state {
-            NameHandling::Reserved => Some(
+            NameValidation::Reserved => Some(
                 Paragraph::new("name used by server")
                     .centered()
                     .block(Block::bordered().title_top(Line::from("Reserved name").centered())),
             ),
-            NameHandling::Empty => Some(
+            NameValidation::Empty => Some(
                 Paragraph::new("No name entered")
-                    .centered()
-                    .block(Block::bordered().title_top(Line::from("Invalid name").centered())),
+                    .block(Block::bordered().title_top(Line::from("Invalid name").centered()))
+                    .centered(),
             ),
-            NameHandling::Valid => None,
+            NameValidation::Used => Some(
+                Paragraph::new("other user is using this name")
+                    .block(Block::bordered().title_top(Line::from("Used name").centered()))
+                    .centered(),
+            ),
+            NameValidation::Valid(_) => None,
         }
     }
 
     // NOTE i should learn about ratatui
-    pub fn render(&mut self, frame: &mut Frame, messages: &mut [String]) {
+    pub fn render(&mut self, frame: &mut Frame, messages: &mut Vec<String>) {
         // NOTE maybe do match here ?
         let (help_area, input_area, messages_area) = match self.input_state {
             InputState::EnterName => {
@@ -182,7 +173,7 @@ impl Ui {
         // helping area things
         let (msg, style) = match self.input.mode {
             InputMode::Normal => (
-                vec!["Press q to exit, e to start editing.".into()],
+                vec!["Press q to exit, i to start editing.".into()],
                 Style::default(),
             ),
             InputMode::Editing => (
@@ -219,18 +210,27 @@ impl Ui {
                 input_area.y + 1,
             )),
         }
-
         // messages area
-        let messages: Vec<ListItem> = messages
-            .iter()
-            .map(|msgs| {
-                let content = Line::from(Span::raw(format!("{}", msgs)));
-                ListItem::new(content)
-            })
-            .collect();
-        let messages = List::new(messages).block(Block::bordered().title("Messages"));
         if let Some(messages_area) = messages_area {
-            frame.render_stateful_widget(messages, messages_area, &mut self.messages_state);
+            let msgs = messages
+                .iter()
+                .map(|msgs| {
+                    let content = Line::from(Span::raw(format!("{}", msgs)));
+                    content
+                })
+                .collect::<Vec<Line>>();
+            // NOTE ratatui should make vertical alignemnt as they do with horizontal alignemnt
+            let messages_block = Paragraph::new(msgs)
+                .scroll((
+                    (self.vertical_scrolling.get_position().saturating_sub(10)) as u16,
+                    0 as u16,
+                ))
+                .cyan()
+                .block(Block::bordered().title("Messages"));
+
+            frame.render_widget(messages_block, messages_area);
+            // NOTE fix the scroll bar cutting when scrolling (want to be one piece)
+            self.render_vertical_scrollbar(frame, messages_area, messages);
         }
     }
 }

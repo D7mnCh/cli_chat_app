@@ -1,6 +1,6 @@
 use crate::client::{Client, ServerState};
 use crate::ui::{InputMode, InputState, Ui};
-use crate::utils::{parsing_name, NameHandling};
+use std::sync::mpsc::{self};
 use std::{
     io::Error,
     sync::{Arc, Mutex},
@@ -13,6 +13,13 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::DefaultTerminal;
 
+pub enum NameValidation {
+    Empty,
+    Reserved,
+    Valid(String),
+    Used,
+}
+
 pub struct App {
     ui: Ui,
     pub client: Client,
@@ -22,8 +29,7 @@ pub struct App {
 impl App {
     pub fn new() -> Self {
         let ui = Ui::new();
-        let mut client = Client::new();
-        let _ = client.connect();
+        let client = Client::new();
 
         Self {
             ui,
@@ -31,6 +37,7 @@ impl App {
             messages: Default::default(),
         }
     }
+
     // sent to local messages history
     pub fn submit_message(&mut self) {
         let detailed_msg = format!("{}: {}", self.client.name, self.ui.input.buffer);
@@ -42,67 +49,78 @@ impl App {
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<(), Error> {
         //TODO to make it here you must use ratatui widget (next)
-        //let _ = self.client.connect();
-        match self.client.networking.server_state {
-            ServerState::Connected(_) => {
-                let _ = self.client.received_client_msgs(Arc::clone(&self.messages));
-                loop {
+        let _ = self.client.connect();
+        let (server_state_tx, server_state_rx) = mpsc::channel::<ServerState>();
+        let (name_validation_tx, name_validation_rx) = mpsc::channel::<NameValidation>();
+        let _ = self.client.handle_msgs(
+            Arc::clone(&self.messages),
+            server_state_tx,
+            name_validation_tx,
+        );
+
+        loop {
+            match self.client.networking.server_state {
+                ServerState::Connected(_) => {
                     // NOTE if you used other terminla.draw method it will make like another buffer
                     terminal.draw(|frame| {
                         self.ui.render(
                             frame,
                             &mut self.messages.lock().unwrap_or_else(|e| e.into_inner()),
-                        )
+                        );
                     })?;
+                    // check if server disconnected
+                    if let Ok(_) = server_state_rx.try_recv() {
+                        self.client.networking.server_state = ServerState::Disconnected;
+                        continue;
+                    }
 
                     // 200 to prevent 100% CPU usage
                     if event::poll(Duration::from_millis(200))? {
                         if let Some(key) = event::read()?.as_key_press_event() {
                             match self.ui.input.mode {
                                 InputMode::Normal => match key.code {
-                                    KeyCode::Char('e') => self.ui.input.mode = InputMode::Editing,
+                                    KeyCode::Char('i') => self.ui.input.mode = InputMode::Editing,
                                     KeyCode::Char('q') => {
                                         self.client.disconnected();
                                         return Ok(());
                                     }
-                                    KeyCode::Char('k') => self.ui.scroll_up(),
-                                    KeyCode::Char('j') => self.ui.scroll_down(
-                                        self.messages
-                                            .lock()
-                                            .unwrap_or_else(|e| e.into_inner())
-                                            .len(),
-                                    ),
+                                    // NOTE scrolling didn't work, i think some things is resseting it
+                                    KeyCode::Char('k') => self.ui.vertical_scrolling.prev(),
+                                    KeyCode::Char('j') => self.ui.vertical_scrolling.next(),
                                     _ => {}
                                 },
 
                                 InputMode::Editing => match key.code {
                                     KeyCode::Enter => match self.ui.input_state {
                                         InputState::EnterName => {
+                                            self.client.name = self.ui.input.buffer.clone();
+                                            self.client.send_client_name_to_server();
+
                                             let prgh: Option<Paragraph> =
-                                                match parsing_name(&self.ui.input.buffer) {
-                                                    NameHandling::Empty => {
-                                                        Ui::name_err_msg(NameHandling::Empty)
+                                                match name_validation_rx.recv().unwrap() {
+                                                    NameValidation::Empty => {
+                                                        Ui::name_err_msg(NameValidation::Empty)
                                                     }
-                                                    NameHandling::Reserved => {
+                                                    NameValidation::Reserved => {
                                                         self.ui.input.buffer.clear();
                                                         self.ui.input.reset_cursor();
-                                                        Ui::name_err_msg(NameHandling::Reserved)
+                                                        Ui::name_err_msg(NameValidation::Reserved)
                                                     }
-                                                    NameHandling::Valid => {
+                                                    NameValidation::Used => {
+                                                        self.ui.input.buffer.clear();
+                                                        self.ui.input.reset_cursor();
+                                                        Ui::name_err_msg(NameValidation::Used)
+                                                    }
+                                                    NameValidation::Valid(_) => {
                                                         self.client.name =
                                                             self.ui.input.buffer.clone();
-                                                        self.client.send_client_name_to_server();
+                                                        self.ui.input_state = InputState::Chatting;
 
                                                         self.ui.input.buffer.clear();
                                                         self.ui.input.reset_cursor();
-                                                        self.ui.select_last_message(
-                                                            &self
-                                                                .messages
-                                                                .lock()
-                                                                .unwrap_or_else(|e| e.into_inner()),
-                                                        );
-                                                        self.ui.input_state = InputState::Chatting;
-                                                        Ui::name_err_msg(NameHandling::Valid)
+                                                        Ui::name_err_msg(NameValidation::Valid(
+                                                            String::new(),
+                                                        ))
                                                     }
                                                 };
 
@@ -134,12 +152,8 @@ impl App {
                                                 continue;
                                             }
                                             self.submit_message();
-                                            self.ui.select_last_message(
-                                                &mut self
-                                                    .messages
-                                                    .lock()
-                                                    .unwrap_or_else(|e| e.into_inner()),
-                                            );
+                                            // NOTE you need window height for adjusment
+                                            self.ui.vertical_scrolling.last();
 
                                             self.client
                                                 .send_message_to_server(&mut self.ui.input.buffer);
@@ -160,17 +174,15 @@ impl App {
                         }
                     }
                 }
-            }
+                ServerState::Disconnected => {
+                    let paragraph = Paragraph::new("server is not running at the moment")
+                        .centered()
+                        .block(Block::bordered().title_top(Line::from("Error").centered()));
+                    terminal.draw(|frame| {
+                        frame.render_widget(paragraph, frame.area());
+                    })?;
+                    self.client.connect();
 
-            ServerState::Disconnected => loop {
-                let paragraph = Paragraph::new("server is not running at the moment")
-                    .centered()
-                    .block(Block::bordered().title_top(Line::from("Error").centered()));
-                terminal.draw(|frame| {
-                    frame.render_widget(paragraph, frame.area());
-                })?;
-
-                if event::poll(Duration::from_millis(200))? {
                     if let Some(key) = event::read()?.as_key_press_event() {
                         match key.code {
                             KeyCode::Char(_) | KeyCode::Enter => {
@@ -180,22 +192,38 @@ impl App {
                         }
                     }
                 }
-            },
+            }
         }
     }
 }
 #[cfg(test)]
 mod test {}
 /*
-- no more features, organize your project, and try understand the ratatui library
-TODO
-- when other clients send message, for now i want to select last message
-- try to understand how scrolling work and also the other things in ratatui
-- what to do if name have being used by other clients
-- on the first messages, it take why so long to scroll down, but with scroll_up it doesn't
-(when hitting the ground) -> cause you are literally selecting the messages
-- make input expand when hits edge, like either expand in width or height
+ - no more features, organize your project, and try understand the ratatui library
+ - ratatui examples is your friends for ui
+
+ TODO Features:
+ - Ui:
+ - i need logging in ratatui context, my project will not scale well if i not did that
+ - messages pop out from bottom to top
+ - adjust scrolling with messages height
+ - when other clients sned nessage, for now i want to select last message
+ - make input expand when hits edge, like either expand in width or height
     - or just make a limit of chars
-- when run server let user input ip address
-- switch to using async
+- make logs in popout window (see ratatui examples)
+
+ - not Ui:
+ - make the code more readble
+ - retry connection
+ - what to do if name have being used by other clients
+ - don't allow clients have same names (test it, without)
+ - when run server let user input ip address
+ - sometimes, the timer freeze for 1sec
+ - when i suspend server, what will happen if another device connected
+
+TODO
+- next (adding horizontal moving on input area(i think it's should be easy))
+- select the last message when entering the app
+- switch to using async (later)
+- i wanna know when to use channels and smart pointer like Arc + Mutex
 */

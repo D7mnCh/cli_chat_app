@@ -1,11 +1,11 @@
 //#![allow(unused)]
+use crate::{app::NameValidation, utils::parsing_name_server};
 use std::{
     collections::HashMap,
     io::{self, Read, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream},
     sync::{Arc, Mutex},
-    thread,
-    time::Duration,
+    thread::{self},
 };
 
 pub struct Server {
@@ -30,36 +30,20 @@ impl Server {
         Ok(())
     }
 
-    pub fn get_client_name(stream: &mut TcpStream) -> String {
-        let mut raw_message = [0; 1024];
-        let mut name = String::new();
-        if let Ok(bytes_readed) = stream.read(&mut raw_message) {
-            let detailed_message: String = str::from_utf8(&raw_message[..bytes_readed])
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            name = detailed_message;
-        }
-
-        return name;
-    }
-
-    // NOTE only one client can recieve messages at a time although i am using sending inside
-    // a thread, why ?
     fn send_message_history(
         stream: &mut TcpStream,
         messages: &mut Vec<String>,
         client_name: &String,
     ) {
         // sending sample of messages
-        let mut vec_of_messages = Vec::new();
-        for i in 0..=50 {
-            let sample_message = i.to_string() + ":Server";
-            vec_of_messages.push(sample_message);
-        }
-        for sample_message in vec_of_messages.iter() {
-            let _ = stream.write_all((sample_message.to_owned() + "\n").as_bytes());
-        }
+        //let mut vec_of_messages = Vec::new();
+        //for i in 0..=20 {
+        //    let sample_message = i.to_string() + ":Server";
+        //    vec_of_messages.push(sample_message);
+        //}
+        //for sample_message in vec_of_messages.iter() {
+        //    let _ = stream.write_all((sample_message.to_owned() + "\n").as_bytes());
+        //}
 
         if messages.is_empty() {
             return;
@@ -77,47 +61,26 @@ impl Server {
     pub fn run(&mut self) -> io::Result<()> {
         if let Some(listener) = &mut self.listener {
             for stream in listener.incoming() {
+                println!("[Log]: new connection");
                 // using match and not using propagation because if one client get me an error,
                 //the whole server is gonna crush, and that's bad
                 match stream {
                     Ok(mut s) => {
                         let cloned_messages = Arc::clone(&self.messages);
                         let cloned_clients = Arc::clone(&self.clients);
-                        let cloned_stream = s.try_clone()?;
+                        let mut cloned_stream = s.try_clone()?;
+                        let mut client_name: Option<String> = None;
 
                         thread::spawn(move || -> io::Result<()> {
-                            let name = loop {
-                                let received_name = Server::get_client_name(&mut s);
-                                // when client quit before sending his name,
-                                //it will push empty string
-                                if received_name.is_empty() {
-                                    continue;
-                                } else {
-                                    break received_name;
-                                }
-                            };
-
-                            cloned_clients
-                                .lock()
-                                // i can get poisoning data (not complete), for now
-                                //return data always even though she might be currepted
-                                .unwrap_or_else(|e| e.into_inner())
-                                .insert(name.clone(), cloned_stream);
-                            println!("{name} has connected");
-
-                            Server::send_message_history(
-                                &mut s,
-                                &mut cloned_messages.lock().unwrap_or_else(|e| e.into_inner()),
-                                &name,
-                            );
-
                             loop {
                                 let mut raw_message = [0; 1024];
                                 match s.read(&mut raw_message) {
                                     // if client program crush (it will send 0 byte as a result), if
-                                    // yes then break his s loop
+                                    // yes then break his stream loop
                                     Ok(0) => {
-                                        println!("{name} has disconnected");
+                                        if let Some(client_name) = client_name {
+                                            println!("{client_name} has disconnected");
+                                        }
                                         break Ok(());
                                     }
 
@@ -133,11 +96,98 @@ impl Server {
 
                                         for detailed_msg in detailed_messages.iter() {
                                             let detailed_msg_cloned = detailed_msg;
-
                                             let detailed_msg: Vec<&str> =
                                                 detailed_msg.split(':').collect();
 
-                                            if let [msg, name] = detailed_msg[..] {
+                                            if let [recieved_name, msg] = detailed_msg[..] {
+                                                client_name = Some(msg.to_string());
+                                                if recieved_name == "name" {
+                                                    let checked_name = parsing_name_server(
+                                                        client_name.clone(),
+                                                        cloned_clients
+                                                            .clone()
+                                                            .lock()
+                                                            .unwrap()
+                                                            .iter()
+                                                            .map(|e| e.0)
+                                                            .collect(),
+                                                    );
+
+                                                    match checked_name {
+                                                        NameValidation::Reserved => {
+                                                            let _ = cloned_stream.write_all(
+                                                                ("server:reserved\n").as_bytes(),
+                                                            );
+                                                            println!(
+                                                                "[Error]: sending name to client"
+                                                            );
+                                                            continue;
+                                                        }
+                                                        NameValidation::Used => {
+                                                            let _ = cloned_stream.write_all(
+                                                                ("server:used\n").as_bytes(),
+                                                            );
+                                                            println!(
+                                                                "[Error]: sending name to client"
+                                                            );
+                                                            continue;
+                                                        }
+                                                        // when client quit before sending his name,
+                                                        //it will push empty string
+                                                        NameValidation::Empty => {
+                                                            let _ = cloned_stream.write_all(
+                                                                ("server:empty\n").as_bytes(),
+                                                            );
+                                                            println!(
+                                                                "[Error]: sending name to client"
+                                                            );
+                                                            continue;
+                                                        }
+                                                        NameValidation::Valid(name) => {
+                                                            let _ = cloned_stream.write_all(
+                                                                ("server:valid\n").as_bytes(),
+                                                            );
+
+                                                            // NOTE the stay connected one will not receive a message that
+                                                            //new memebr enter the chat!
+                                                            Server::send_message_history(
+                                                                &mut s,
+                                                                &mut cloned_messages
+                                                                    .lock()
+                                                                    .unwrap_or_else(|e| {
+                                                                        e.into_inner()
+                                                                    }),
+                                                                &name,
+                                                            );
+                                                            let new_connection_msg = format!(
+                                                                "server:{name} entered the chat"
+                                                            );
+                                                            cloned_messages
+                                                                .lock()
+                                                                .unwrap_or_else(|e| e.into_inner())
+                                                                .push(new_connection_msg.clone());
+                                                            let _ = cloned_stream.write_all(
+                                                                (new_connection_msg + "\n")
+                                                                    .as_bytes(),
+                                                            );
+
+                                                            println!("[Log]: sending name to client: name -> {name}");
+                                                            cloned_clients
+                                                                .lock()
+                                                                // i can get poisoning data (not complete), for now
+                                                                //return data always even though she might be currepted
+                                                                .unwrap_or_else(|e| e.into_inner())
+                                                                .insert(
+                                                                    name.clone(),
+                                                                    cloned_stream.try_clone()?,
+                                                                );
+                                                            println!("[Log]: {name} has connected");
+
+                                                            continue;
+                                                        }
+                                                    };
+                                                }
+
                                                 if !msg.is_empty() {
                                                     cloned_messages
                                                         .lock()
@@ -149,7 +199,7 @@ impl Server {
                                                         .unwrap_or_else(|e| e.into_inner())
                                                         .iter_mut()
                                                     {
-                                                        if name != *client.0 {
+                                                        if recieved_name != client.0 {
                                                             let _ = client.1.write_all(
                                                                 ((*detailed_msg_cloned).to_owned()
                                                                     + "\n")
@@ -191,7 +241,9 @@ impl Server {
 }
 /*
 TODO
-- if you fixed trim, you will get red off sleep
+- make only one read
+- if clients connected at the same time, it can be multiple clients have the same name
+- sometimes getting blocked when i enter a name
 - os error 5 search about it, and fix it ofc
 - display to others that the client is disconnected or connected
 - make server in oop stye
