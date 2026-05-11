@@ -1,12 +1,10 @@
-#![allow(unused)]
-use crate::app::NameValidation;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
-use std::sync::mpsc::{self, Sender, TryRecvError};
+use crate::shared_utils::{LockClean, NameValidation};
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+use std::sync::mpsc::Sender;
 use std::{
-    io::{self, BufRead, BufReader, Error, Read, Stdout, Write},
-    ops::Add,
+    io::{self, Read, Write},
     sync::{Arc, Mutex},
-    thread::{self, JoinHandle},
+    thread,
     time::Duration,
 };
 
@@ -30,8 +28,14 @@ impl Networking {
     pub fn new() -> Self {
         Self {
             server_disconned: Default::default(),
-            addr: SocketAddr::from((Ipv4Addr::new(192, 168, 190, 211), 7878)),
+            addr: SocketAddr::from((Ipv4Addr::new(0, 0, 0, 0), 7878)),
             server_state: ServerState::Disconnected,
+        }
+    }
+
+    pub fn send_to_server(&mut self, msg: &String) {
+        if let ServerState::Connected(stream) = &mut self.server_state {
+            let _ = stream.write_all(msg.as_bytes());
         }
     }
 }
@@ -56,24 +60,6 @@ impl Client {
             };
     }
 
-    pub fn send_client_name_to_server(&mut self) {
-        if let ServerState::Connected(stream) = &mut self.networking.server_state {
-            let name_msg = format!("name:{}\n", self.name);
-            let _ = stream.write_all(name_msg.as_bytes());
-        }
-    }
-
-    pub fn send_message_to_server(&mut self, client_message: &String) {
-        if let ServerState::Connected(stream) = &mut self.networking.server_state {
-            if !client_message.is_empty() {
-                let separator = ":";
-                let suffix_msg = format!("{}{}\n", separator, client_message);
-                let detailed_message: String = self.name.clone().add(&suffix_msg).to_string();
-                let _ = stream.write_all(detailed_message.as_bytes());
-            }
-        }
-    }
-
     // if not use shutdown method and just "close the ratatui context", it will sent an error of
     //client program crushes (os error 104)
     pub fn disconnected(&self) {
@@ -96,7 +82,7 @@ impl Client {
                 let mut raw_message = [0; 1024];
                 match cloned_stream.read(&mut raw_message) {
                     Ok(0) => {
-                        server_state_tx.send(ServerState::Disconnected);
+                        let _ = server_state_tx.send(ServerState::Disconnected);
                         break;
                     }
 
@@ -107,33 +93,42 @@ impl Client {
 
                         let messages_lines: Vec<&str> = message_buffer.split('\n').collect();
                         for line in messages_lines.iter() {
-                            let fields: Vec<&str> = line.split(':').collect();
-
-                            if let [name, msg] = fields[..] {
-                                match (name, msg) {
-                                    ("server", "reserved") => {
-                                        name_validation_tx.send(NameValidation::Reserved);
-                                    }
-                                    ("server", "used") => {
-                                        name_validation_tx.send(NameValidation::Used);
-                                    }
-                                    ("server", "empty") => {
-                                        name_validation_tx.send(NameValidation::Empty);
-                                    }
-                                    ("server", "valid") => {
-                                        name_validation_tx
-                                            .send(NameValidation::Valid(String::new()));
-                                    }
-                                    (_, msg) if !msg.is_empty() || msg.trim() != "" => {
-                                        let chat_message = format!("{name}: {msg}");
-
-                                        cloned_messages
-                                            .lock()
-                                            .unwrap_or_else(|e| e.into_inner())
-                                            .push(chat_message);
-                                    }
-                                    _ => {}
+                            let server_msg: Vec<&str> = line.splitn(4, ':').collect();
+                            match server_msg[..] {
+                                ["server", "success", "valid_name", content] => {
+                                    let _ = name_validation_tx
+                                        .send(NameValidation::Valid(content.to_string()));
                                 }
+                                ["server", "event", content] => {
+                                    let msg = format!("server: {content}");
+                                    cloned_messages.lock_mutex().push(msg);
+                                }
+                                ["server", "error", "reserved_name"] => {
+                                    let _ = name_validation_tx.send(NameValidation::Reserved);
+                                }
+                                ["server", "error", "used_name"] => {
+                                    let _ = name_validation_tx.send(NameValidation::Used);
+                                }
+                                ["server", "error", "empty_name"] => {
+                                    let _ = name_validation_tx.send(NameValidation::Empty);
+                                }
+                                ["server", "error", "illegalchar", character] => {
+                                    if let Some(character) = character.chars().next() {
+                                        let _ = name_validation_tx
+                                            .send(NameValidation::IllegalChar(character));
+                                    }
+                                }
+                                ["client", "chat", sender, content] if !content.is_empty() => {
+                                    let chat_message = format!("{sender}: {content}");
+
+                                    cloned_messages
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner())
+                                        .push(chat_message);
+                                }
+                                // ignore this case that could cuz from split('\n') method
+                                [""] => {}
+                                ref uknown => println!("[Warn]: unkown msg: {uknown:?}"),
                             }
                         }
                     }

@@ -1,5 +1,11 @@
-use crate::client::{Client, ServerState};
-use crate::ui::{InputMode, InputState, Ui};
+use crate::{
+    client::{
+        client_messages::ClientMessages,
+        network::{Client, ServerState},
+        ui::{InputMode, InputState, Ui},
+    },
+    shared_utils::{LockClean, NameValidation},
+};
 use std::sync::mpsc::{self};
 use std::{
     io::Error,
@@ -13,12 +19,13 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::DefaultTerminal;
 
-#[derive(Debug)]
-pub enum NameValidation {
-    Empty,
-    Reserved,
-    Valid(String),
-    Used,
+pub fn send_msg_to_local_history(
+    messages: &mut Vec<String>,
+    client_name: &mut String,
+    input_buffer: &mut String,
+) {
+    let detailed_msg = format!("{}: {}", client_name, input_buffer);
+    messages.push(detailed_msg);
 }
 
 pub struct App {
@@ -39,17 +46,7 @@ impl App {
         }
     }
 
-    // sent to local messages history
-    pub fn submit_message(&mut self) {
-        let detailed_msg = format!("{}: {}", self.client.name, self.ui.input.buffer);
-        self.messages
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(detailed_msg);
-    }
-
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<(), Error> {
-        //TODO to make it here you must use ratatui widget (next)
         let _ = self.client.connect();
         let (server_state_tx, server_state_rx) = mpsc::channel::<ServerState>();
         let (name_validation_tx, name_validation_rx) = mpsc::channel::<NameValidation>();
@@ -60,14 +57,11 @@ impl App {
         );
 
         loop {
-            match self.client.networking.server_state {
+            match &self.client.networking.server_state {
                 ServerState::Connected(_) => {
-                    // NOTE if you used other terminla.draw method it will make like another buffer
+                    // NOTE if you used other terminla.draw method it will make like another buffer to draw on
                     terminal.draw(|frame| {
-                        self.ui.render(
-                            frame,
-                            &mut self.messages.lock().unwrap_or_else(|e| e.into_inner()),
-                        );
+                        self.ui.render(frame, &mut self.messages.lock_mutex());
                     })?;
                     // check if server disconnected
                     if let Ok(_) = server_state_rx.try_recv() {
@@ -75,7 +69,7 @@ impl App {
                         continue;
                     }
 
-                    // 200 to prevent 100% CPU usage
+                    // 200millis to prevent 100% CPU core usage
                     if event::poll(Duration::from_millis(200))? {
                         if let Some(key) = event::read()?.as_key_press_event() {
                             match self.ui.input.mode {
@@ -85,7 +79,6 @@ impl App {
                                         self.client.disconnected();
                                         return Ok(());
                                     }
-                                    // NOTE scrolling didn't work, i think some things is resseting it
                                     KeyCode::Char('k') => self.ui.vertical_scrolling.prev(),
                                     KeyCode::Char('j') => self.ui.vertical_scrolling.next(),
                                     _ => {}
@@ -95,35 +88,48 @@ impl App {
                                     KeyCode::Enter => match self.ui.input_state {
                                         InputState::EnterName => {
                                             self.client.name = self.ui.input.buffer.clone();
-                                            self.client.send_client_name_to_server();
 
-                                            let prgh: Option<Paragraph> =
-                                                match name_validation_rx.recv().unwrap() {
-                                                    NameValidation::Empty => {
-                                                        Ui::name_err_msg(NameValidation::Empty)
-                                                    }
-                                                    NameValidation::Reserved => {
-                                                        self.ui.input.buffer.clear();
-                                                        self.ui.input.reset_cursor();
-                                                        Ui::name_err_msg(NameValidation::Reserved)
-                                                    }
-                                                    NameValidation::Used => {
-                                                        self.ui.input.buffer.clear();
-                                                        self.ui.input.reset_cursor();
-                                                        Ui::name_err_msg(NameValidation::Used)
-                                                    }
-                                                    NameValidation::Valid(_) => {
-                                                        self.client.name =
-                                                            self.ui.input.buffer.clone();
-                                                        self.ui.input_state = InputState::Chatting;
+                                            let serialized_msg =
+                                                ClientMessages::CheckName(self.client.name.clone())
+                                                    .serialize();
+                                            self.client.networking.send_to_server(&serialized_msg);
 
-                                                        self.ui.input.buffer.clear();
-                                                        self.ui.input.reset_cursor();
-                                                        Ui::name_err_msg(NameValidation::Valid(
-                                                            String::new(),
-                                                        ))
-                                                    }
-                                                };
+                                            let prgh: Option<Paragraph> = match name_validation_rx
+                                                .recv()
+                                                .expect("[Error]:the reader thread get killed")
+                                            {
+                                                NameValidation::Empty => {
+                                                    Ui::name_err_msg(&NameValidation::Empty)
+                                                }
+                                                NameValidation::Reserved => {
+                                                    self.ui.input.buffer.clear();
+                                                    self.ui.input.reset_cursor();
+                                                    Ui::name_err_msg(&NameValidation::Reserved)
+                                                }
+                                                NameValidation::IllegalChar(c) => {
+                                                    self.ui.input.buffer.clear();
+                                                    self.ui.input.reset_cursor();
+                                                    Ui::name_err_msg(&NameValidation::IllegalChar(
+                                                        c,
+                                                    ))
+                                                }
+
+                                                NameValidation::Used => {
+                                                    self.ui.input.buffer.clear();
+                                                    self.ui.input.reset_cursor();
+                                                    Ui::name_err_msg(&NameValidation::Used)
+                                                }
+                                                NameValidation::Valid(received_name) => {
+                                                    self.client.name = received_name.clone();
+                                                    self.ui.input_state = InputState::Chatting;
+
+                                                    self.ui.input.buffer.clear();
+                                                    self.ui.input.reset_cursor();
+                                                    Ui::name_err_msg(&NameValidation::Valid(
+                                                        received_name,
+                                                    ))
+                                                }
+                                            };
 
                                             if let Some(error_msg) = prgh {
                                                 terminal.draw(|frame| {
@@ -133,6 +139,7 @@ impl App {
                                             }
                                             // TODO later, i guess make user input in order to retry,
                                             //if not then can you make invalid have 1 sec else more ?
+                                            // TODO just make user press any botton to turn back tn entering name phase
                                             continue;
                                         }
                                         InputState::Chatting => {
@@ -140,12 +147,9 @@ impl App {
                                                 self.client.disconnected();
                                                 return Ok(());
                                             }
-                                            // NOTE display in ratatui terminal context
+                                            // TODO display in ratatui terminal context
                                             if self.ui.input.buffer == "/msgs" {
-                                                dbg!(&self
-                                                    .messages
-                                                    .lock()
-                                                    .unwrap_or_else(|e| e.into_inner()));
+                                                dbg!(&self.messages.lock_mutex());
                                                 self.ui.input.buffer.clear();
                                                 continue;
                                             }
@@ -156,13 +160,23 @@ impl App {
                                                 self.ui.input.reset_cursor();
                                                 continue;
                                             }
-                                            self.submit_message();
+
+                                            send_msg_to_local_history(
+                                                &mut self.messages.lock_mutex(),
+                                                &mut self.client.name,
+                                                &mut self.ui.input.buffer,
+                                            );
+
                                             // NOTE you need window height for adjusment
-                                            // NOTE maybe do parsing after server send an info
                                             self.ui.vertical_scrolling.last();
 
-                                            self.client
-                                                .send_message_to_server(&mut self.ui.input.buffer);
+                                            let serialized_msg = ClientMessages::Chat {
+                                                sender: self.client.name.clone(),
+                                                content: self.ui.input.buffer.clone(),
+                                            }
+                                            .serialize();
+                                            self.client.networking.send_to_server(&serialized_msg);
+
                                             self.ui.input.buffer.clear();
                                             self.ui.input.reset_cursor();
                                         }
@@ -204,27 +218,3 @@ impl App {
 }
 #[cfg(test)]
 mod test {}
-/*
- - no more features, organize your project, and try understand the ratatui library
- - ratatui examples is your friends for ui
-
- TODO Features:
- - Ui:
- - i need logging in ratatui context, my project will not scale well if i not did that
- - next (adding horizontal moving on input area(i think it's should be easy))
- - select the last message when entering the app
- - messages pop out from bottom to top
- - adjust scrolling with messages height
-- make logs in popout window (see ratatui examples)
-
- - not Ui:
- - (Access is denied. (os error 6)) i get this error on windows when i try to connect
- - os error 10054 i get this error on windows when i crush the program
- - make the code more readble
- - retry connection
- - when run server let user input ip address
- - when i suspend server, what will happen if another device connected
-
-TODO big moves
-- switch to using async (later)
-*/

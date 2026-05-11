@@ -1,0 +1,284 @@
+use crate::server::name_validation::check_name_validity;
+use crate::server::server_messages::ServerMessage;
+use crate::shared_utils::{LockClean, NameValidation};
+
+use std::{
+    collections::HashMap,
+    io::{self, Read, Write},
+    net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream},
+    sync::{Arc, Mutex},
+    thread::{self},
+};
+
+pub struct Server {
+    addr: SocketAddr,
+    listener: Option<TcpListener>,
+    messages: Arc<Mutex<Vec<String>>>,
+    clients: Arc<Mutex<HashMap<String, TcpStream>>>,
+}
+
+impl Server {
+    pub fn new() -> Self {
+        Self {
+            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 7878),
+            listener: None,
+            messages: Default::default(),
+            clients: Default::default(),
+        }
+    }
+
+    // didn't use self cuz i'll move self into a thread that have static life time
+    pub fn broadcast(clients: &mut HashMap<String, TcpStream>, msg: &String) {
+        for trimed_msg in msg.lines() {
+            {
+                let suffix_chat = trimed_msg.strip_prefix("client:chat:");
+                if let Some(prefix_chat) = suffix_chat {
+                    match prefix_chat.splitn(2, ":").collect::<Vec<&str>>()[..] {
+                        [chat_sender, ..] => {
+                            for (client_name, client_stream) in clients.iter_mut() {
+                                if chat_sender != client_name {
+                                    let _ = client_stream
+                                        .write_all((trimed_msg.to_owned() + "\n").as_bytes());
+                                    //println!("[Info]:sending chat to {client_name}: {trimed_msg}");
+                                }
+                            }
+                        }
+                        _ => todo!(),
+                    }
+                    continue;
+                }
+            }
+
+            for (_client_name, client_stream) in clients.iter_mut() {
+                let _ = client_stream.write_all((trimed_msg.to_owned() + "\n").as_bytes());
+                //println!(
+                //    "[Info]:sending event or chat or name validity to {client_name}: {trimed_msg}"
+                //);
+            }
+        }
+    }
+
+    // didn't use self cuz i'll move self into a thread that have static life time
+    pub fn send_to_one_client(client: &mut TcpStream, msg: &String) {
+        let _ = client.write_all(msg.as_bytes());
+    }
+
+    fn _sending_sample_msgs(stream: &mut TcpStream) {
+        let mut vec_of_messages = Vec::new();
+        let num_of_sample_msgs = 20;
+
+        for i in 0..=num_of_sample_msgs {
+            let sample_message = i.to_string() + ":Server";
+            vec_of_messages.push(sample_message);
+        }
+
+        for sample_message in vec_of_messages.iter() {
+            let msg_to_broadcast = format!("{}\n", sample_message.to_owned());
+            let _ = stream.write_all(msg_to_broadcast.as_bytes());
+        }
+        println!("[Log]:samples messages have being sent to all clients succesfully",);
+    }
+
+    pub fn bind_addr(&mut self) -> io::Result<()> {
+        let listener = TcpListener::bind(self.addr)?;
+        self.listener = Some(listener);
+        Ok(())
+    }
+
+    pub fn run(&mut self) -> io::Result<()> {
+        if let Some(listener) = &mut self.listener {
+            for stream in listener.incoming() {
+                println!("[Log]:new connection");
+                // using match and not using propagation because if one client get me an error,
+                //the whole server is gonna crush, and that's bad
+                match stream {
+                    Ok(mut s) => {
+                        let cloned_messages = Arc::clone(&self.messages);
+                        let cloned_clients = Arc::clone(&self.clients);
+                        let mut cloned_stream = s.try_clone()?;
+                        let mut client_name: Option<String> = None;
+
+                        thread::spawn(move || -> io::Result<()> {
+                            loop {
+                                let mut full_serialized_msg: String = String::new();
+
+                                let mut raw_message = [0; 1024];
+                                match s.read(&mut raw_message) {
+                                    // if client program crush (it will send 0 byte as a result), if
+                                    // yes then break his stream loop
+                                    Ok(0) => {
+                                        if let Some(ref client_name) = client_name {
+                                            full_serialized_msg.push_str(
+                                                &ServerMessage::ClientDisconnected(
+                                                    client_name.to_owned(),
+                                                )
+                                                .serialize(),
+                                            );
+
+                                            cloned_messages.lock_mutex().push(format!(
+                                                "server:event:{client_name} disconnected"
+                                            ));
+
+                                            Server::broadcast(
+                                                &mut cloned_clients.lock_mutex(),
+                                                &full_serialized_msg,
+                                            );
+                                        }
+
+                                        break Ok(());
+                                    }
+
+                                    Ok(bytes_read) => {
+                                        let message_buffer =
+                                            str::from_utf8(&raw_message[..bytes_read])
+                                                .unwrap_or_default();
+
+                                        let messages_lines: Vec<&str> =
+                                            message_buffer.lines().collect();
+
+                                        for line in messages_lines.iter() {
+                                            let received_name_fields: Vec<&str> =
+                                                line.splitn(3, ':').collect();
+
+                                            if let ["client", "name", received_client_name] =
+                                                received_name_fields[..]
+                                            {
+                                                client_name =
+                                                    Some(received_client_name.to_string());
+
+                                                let name_validation = check_name_validity(
+                                                    client_name.as_deref(),
+                                                    cloned_clients
+                                                        .lock_mutex()
+                                                        .iter()
+                                                        .map(|(client_names, _)| {
+                                                            client_names.clone()
+                                                        })
+                                                        .collect(),
+                                                );
+
+                                                let server_msg = match name_validation {
+                                                    NameValidation::Reserved => {
+                                                        ServerMessage::InvalidName(
+                                                            NameValidation::Reserved,
+                                                        )
+                                                    }
+                                                    NameValidation::Used => {
+                                                        ServerMessage::InvalidName(
+                                                            NameValidation::Used,
+                                                        )
+                                                    }
+                                                    // when client quit before sending his name,
+                                                    //it will push empty string
+                                                    NameValidation::Empty => {
+                                                        ServerMessage::InvalidName(
+                                                            NameValidation::Empty,
+                                                        )
+                                                    }
+                                                    NameValidation::IllegalChar(c) => {
+                                                        ServerMessage::InvalidName(
+                                                            NameValidation::IllegalChar(c),
+                                                        )
+                                                    }
+                                                    NameValidation::Valid(client_name) => {
+                                                        ServerMessage::ValidName(client_name)
+                                                    }
+                                                };
+
+                                                match server_msg {
+                                                    ref msg @ ServerMessage::InvalidName(_) => {
+                                                        full_serialized_msg
+                                                            .push_str(&msg.serialize());
+                                                    }
+                                                    ref msg @ ServerMessage::ValidName(
+                                                        ref client_name,
+                                                    ) => {
+                                                        let new_connection_msg = format!(
+                                                            "server:event:{client_name} connected"
+                                                        );
+                                                        cloned_messages
+                                                            .lock_mutex()
+                                                            .push(new_connection_msg.clone());
+
+                                                        Server::broadcast(
+                                                            &mut cloned_clients.lock_mutex(),
+                                                            &new_connection_msg,
+                                                        );
+
+                                                        cloned_clients.lock_mutex().insert(
+                                                            client_name.to_string(),
+                                                            cloned_stream.try_clone()?,
+                                                        );
+
+                                                        full_serialized_msg
+                                                            .push_str(&msg.serialize());
+
+                                                        full_serialized_msg.push_str(
+                                                            &ServerMessage::History(
+                                                                cloned_messages
+                                                                    .lock_mutex()
+                                                                    .to_vec(),
+                                                            )
+                                                            .serialize(),
+                                                        );
+                                                    }
+                                                    _ => {}
+                                                }
+
+                                                Server::send_to_one_client(
+                                                    &mut cloned_stream,
+                                                    &full_serialized_msg,
+                                                );
+
+                                                continue;
+                                            }
+
+                                            let client_message_fields: Vec<&str> =
+                                                line.splitn(4, ':').collect();
+
+                                            if let ["client", "chat", sender, msg] =
+                                                client_message_fields[..]
+                                            {
+                                                let client_message = ServerMessage::Chat {
+                                                    sender: sender.to_string(),
+                                                    content: msg.to_string(),
+                                                };
+
+                                                full_serialized_msg
+                                                    .push_str(&client_message.serialize());
+
+                                                let detailed_message =
+                                                    format!("client:chat:{sender}:{msg}");
+                                                cloned_messages.lock_mutex().push(detailed_message);
+
+                                                Server::broadcast(
+                                                    &mut cloned_clients.lock_mutex(),
+                                                    &full_serialized_msg,
+                                                );
+
+                                                dbg!(&cloned_messages);
+                                            }
+                                        }
+                                    }
+
+                                    Err(e) => {
+                                        println!("ERROR: {e}");
+                                        // on if client on different device disconnected
+                                        //it will keep logging the error
+                                        break Ok(());
+                                    }
+                                }
+                            }
+                        });
+                    }
+
+                    Err(e) => {
+                        println!("ERROR: {e}");
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}

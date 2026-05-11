@@ -1,9 +1,9 @@
-use crate::app::NameValidation;
-use ratatui::Frame;
+use crate::shared_utils::NameValidation;
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::Frame;
 
 pub enum InputMode {
     Normal,
@@ -129,10 +129,10 @@ impl Ui {
         );
     }
 
-    pub fn name_err_msg<'a>(state: NameValidation) -> Option<Paragraph<'a>> {
+    pub fn name_err_msg<'a>(state: &NameValidation) -> Option<Paragraph<'a>> {
         match state {
             NameValidation::Reserved => Some(
-                Paragraph::new("name used by server")
+                Paragraph::new("Name used by server")
                     .centered()
                     .block(Block::bordered().title_top(Line::from("Reserved name").centered())),
             ),
@@ -142,11 +142,17 @@ impl Ui {
                     .centered(),
             ),
             NameValidation::Used => Some(
-                Paragraph::new("other user is using this name")
+                Paragraph::new("Other user is using this name")
                     .block(Block::bordered().title_top(Line::from("Used name").centered()))
                     .centered(),
             ),
+            NameValidation::IllegalChar(':') => Some(
+                Paragraph::new("Entered illegalchar \":\"")
+                    .block(Block::bordered().title_top(Line::from("Illegal char").centered()))
+                    .centered(),
+            ),
             NameValidation::Valid(_) => None,
+            NameValidation::IllegalChar(_) => None,
         }
     }
 
