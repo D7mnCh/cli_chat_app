@@ -28,7 +28,7 @@
 - iterators are consumed when next method is called, if next called, it will (consume) that value and become None
 
 
-# TODO 
+# TODO
 - introduce the "why you did such a thing" for the thing that you learnt
 - search on what make project good or profissional
     - good git commits
@@ -40,6 +40,7 @@
         - good comments, the why is more powerfull than the what
         - good architecture disgn
 - i should organize those notes cuz some of them are not this project related
+- i think i can make both issues and features as (issues) in github rather than a note in README.md
 ## On server side
 - (Access is denied. (os error 5)) i get this error on windows when i try to connect
 - os error 10054 i get this error on windows when i crush the program
@@ -48,19 +49,19 @@ to server after quit, i need all clients to quit in order to connect on other te
  - no more features, organize your project, and try understand the ratatui library, ratatui examples is your friends
 ### Ui
 #### issues
- - i need logging in ratatui context, my project will not scale well if i not did that
- - make logs on popout window (see ratatui examples)
- - adding horizontal moving on input area(i think it's should be easy)
- - select the last message when entering the app
- - adjust scrolling with messages height
 #### Features to add
  - when run server let user input ip address
  - waiting room ui to check if server running
+ - jump me on the last message when there many messages
+ - i need logging in ratatui context, my project will not scale well if i not did that
+ - make logs on popout window (see ratatui examples)
+ - set length limit of the client name
 ## Not Ui:
 #### Issues
  - (Access is denied. (os error 6)) i get this error on windows when i try to connect???
  - os error 10054 i get this error on windows when i crush the program
  - when i suspend server, does my program just broke
+ - sometimes, the reader doesn't read from stream well
  #### Features
  - retry connection
 

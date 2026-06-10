@@ -2,7 +2,7 @@ use crate::{
     client::{
         client_messages::ClientMessages,
         network::{Client, ServerState},
-        ui::{InputMode, InputState, Ui},
+        ui::{InputMode, InputState, Ui, TERMINAL_HEIGHT, TERMINAL_WIDTH},
     },
     shared_utils::{LockClean, NameValidation},
 };
@@ -59,9 +59,18 @@ impl App {
         loop {
             match &self.client.networking.server_state {
                 ServerState::Connected(_) => {
-                    // NOTE if you used other terminla.draw method it will make like another buffer to draw on
+                    // if you used other terminla.draw method it will make like another buffer to draw on
                     terminal.draw(|frame| {
-                        self.ui.render(frame, &mut self.messages.lock_mutex());
+                        if frame.area().width < TERMINAL_WIDTH
+                            || frame.area().height < TERMINAL_HEIGHT
+                        {
+                            let warning = self.ui.window_warning_msgs(&frame);
+                            let warning_area = self.ui.get_window_warning_area(&frame);
+
+                            frame.render_widget(warning, warning_area);
+                        } else {
+                            self.ui.render(frame, &mut self.messages.lock_mutex());
+                        }
                     })?;
                     // check if server disconnected
                     if let Ok(_) = server_state_rx.try_recv() {
@@ -167,7 +176,7 @@ impl App {
                                                 &mut self.ui.input.buffer,
                                             );
 
-                                            // NOTE you need window height for adjusment
+                                            // NOTE didn't work
                                             self.ui.vertical_scrolling.last();
 
                                             let serialized_msg = ClientMessages::Chat {
@@ -181,13 +190,18 @@ impl App {
                                             self.ui.input.reset_cursor();
                                         }
                                     },
+
                                     KeyCode::Char(to_insert) => {
                                         self.ui.input.enter_char(to_insert);
                                     }
                                     KeyCode::Esc => self.ui.input.mode = InputMode::Normal,
                                     KeyCode::Backspace => self.ui.input.delete_char(),
-                                    KeyCode::Left => self.ui.input.move_cursor_left(),
-                                    KeyCode::Right => self.ui.input.move_cursor_right(),
+                                    KeyCode::Right => {
+                                        self.ui.input.move_cursor_right();
+                                    }
+                                    KeyCode::Left => {
+                                        self.ui.input.move_cursor_left();
+                                    }
                                     _ => {}
                                 },
                             }
