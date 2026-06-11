@@ -73,6 +73,7 @@ impl Client {
         messages: Arc<Mutex<Vec<String>>>,
         server_state_tx: Sender<ServerState>,
         name_validation_tx: Sender<NameValidation>,
+        new_message_tx: Sender<bool>,
     ) -> io::Result<()> {
         if let ServerState::Connected(stream) = &mut self.networking.server_state {
             let mut cloned_stream = stream.try_clone()?;
@@ -100,6 +101,7 @@ impl Client {
                                         .send(NameValidation::Valid(content.to_string()));
                                 }
                                 ["server", "event", content] => {
+                                    let _ = new_message_tx.send(true);
                                     let msg = format!("server: {content}");
                                     cloned_messages.lock_mutex().push(msg);
                                 }
@@ -125,12 +127,16 @@ impl Client {
                                         .lock()
                                         .unwrap_or_else(|e| e.into_inner())
                                         .push(chat_message);
+                                    let _ = new_message_tx.send(true);
                                 }
                                 // ignore this case that could cuz from split('\n') method
                                 [""] => {}
-                                ref uknown => println!("[Warn]: unkown msg: {uknown:?}"),
+                                ref uknown => {
+                                    println!("[Warn]: unkown msg: {uknown:?}")
+                                }
                             }
                         }
+                        let _ = new_message_tx.send(false);
                     }
                     Err(e) => println!("[Error]: {e}"),
                 }

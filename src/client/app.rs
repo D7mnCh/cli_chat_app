@@ -50,10 +50,12 @@ impl App {
         let _ = self.client.connect();
         let (server_state_tx, server_state_rx) = mpsc::channel::<ServerState>();
         let (name_validation_tx, name_validation_rx) = mpsc::channel::<NameValidation>();
+        let (new_message_tx, new_message_rx) = mpsc::channel::<bool>();
         let _ = self.client.handle_msgs(
             Arc::clone(&self.messages),
             server_state_tx,
             name_validation_tx,
+            new_message_tx,
         );
 
         loop {
@@ -72,9 +74,16 @@ impl App {
                             self.ui.render(frame, &mut self.messages.lock_mutex());
                         }
                     })?;
+
                     // check if server disconnected
                     if let Ok(_) = server_state_rx.try_recv() {
                         self.client.networking.server_state = ServerState::Disconnected;
+                        continue;
+                    }
+
+                    // check for a new message
+                    if let Ok(true) = new_message_rx.try_recv() {
+                        self.ui.vertical_scrolling.last();
                         continue;
                     }
 
@@ -146,21 +155,12 @@ impl App {
                                                 })?;
                                                 thread::sleep(Duration::from_millis(1700));
                                             }
-                                            // TODO later, i guess make user input in order to retry,
-                                            //if not then can you make invalid have 1 sec else more ?
-                                            // TODO just make user press any botton to turn back tn entering name phase
                                             continue;
                                         }
                                         InputState::Chatting => {
                                             if self.ui.input.buffer == "/quit" {
                                                 self.client.disconnected();
                                                 return Ok(());
-                                            }
-                                            // TODO display in ratatui terminal context
-                                            if self.ui.input.buffer == "/msgs" {
-                                                dbg!(&self.messages.lock_mutex());
-                                                self.ui.input.buffer.clear();
-                                                continue;
                                             }
                                             if self.ui.input.buffer.is_empty()
                                                 || self.ui.input.buffer.trim() == String::new()
@@ -176,7 +176,9 @@ impl App {
                                                 &mut self.ui.input.buffer,
                                             );
 
-                                            // NOTE didn't work
+                                            // last method gonna put me on last message that is based on
+                                            //the prev max pos, so i need to update it
+                                            self.ui.updating_max_scroll_pos();
                                             self.ui.vertical_scrolling.last();
 
                                             let serialized_msg = ClientMessages::Chat {
@@ -230,5 +232,3 @@ impl App {
         }
     }
 }
-#[cfg(test)]
-mod test {}

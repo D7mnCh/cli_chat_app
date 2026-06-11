@@ -2,11 +2,16 @@ use crate::shared_utils::NameValidation;
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Text};
-use ratatui::widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
+use ratatui::widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use ratatui::Frame;
 
 pub const TERMINAL_WIDTH: u16 = 100;
 pub const TERMINAL_HEIGHT: u16 = 24;
+
+// need to substract borders height + and title height from chat area height
+//to get the inner chat area height (client pov)
+const TITLE_HEIGTH: u16 = 1;
+const CHAT_AREA_BOTH_BORDERS_HIEGHT: u16 = 2;
 
 pub enum InputMode {
     Normal,
@@ -31,6 +36,7 @@ pub struct Ui {
     pub input: Input,
     pub input_state: InputState,
     pub vertical_scrolling: ScrollbarState,
+    pub max_scrolling_pos: usize,
 }
 
 pub struct Input {
@@ -107,7 +113,16 @@ impl Ui {
             },
             input_state: InputState::EnterName,
             vertical_scrolling: ScrollbarState::new(0),
+            max_scrolling_pos: 0,
         }
+    }
+
+    pub fn updating_max_scroll_pos(&mut self) {
+        self.max_scrolling_pos += 1;
+        let max_scrolling_pos_state = self
+            .vertical_scrolling
+            .content_length(self.max_scrolling_pos);
+        self.vertical_scrolling = max_scrolling_pos_state;
     }
 
     // TODO understand the logic behind this method
@@ -140,12 +155,29 @@ impl Ui {
             .block(Block::bordered().title_top(Line::from("Warning").centered().yellow()))
     }
 
-    fn render_vertical_scrollbar(&mut self, frame: &mut Frame, area: Rect, messages: &Vec<String>) {
-        self.vertical_scrolling = self.vertical_scrolling.content_length(messages.len());
+    fn render_vertical_scrollbar(
+        &mut self,
+        frame: &mut Frame,
+        chat_area: Rect,
+        messages: &Vec<String>,
+    ) {
+        let chat_area_height = chat_area
+            .height
+            .saturating_sub(CHAT_AREA_BOTH_BORDERS_HIEGHT + TITLE_HEIGTH);
+        self.max_scrolling_pos = messages.len().saturating_sub(chat_area_height.into());
+        let max_scrolling_pos_state = self
+            .vertical_scrolling
+            .content_length(self.max_scrolling_pos);
+        self.vertical_scrolling = max_scrolling_pos_state;
+
+        //dbg!(&chat_area.height);
+        //dbg!(&self.max_scrolling_pos);
+        //dbg!(&self.vertical_scrolling.get_position());
+
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalLeft).thumb_style(Color::Red);
         frame.render_stateful_widget(
             scrollbar,
-            area.inner(Margin {
+            chat_area.inner(Margin {
                 vertical: 1,
                 horizontal: 0,
             }),
@@ -223,7 +255,6 @@ impl Ui {
                 InputMode::Normal => Style::default(),
                 InputMode::Editing => Style::default().fg(Color::Yellow),
             })
-            .wrap(Wrap { trim: true })
             .block(Block::bordered().title(match self.input_state {
                 InputState::Chatting => "Input",
                 InputState::EnterName => "Enter Your Name",
@@ -244,22 +275,38 @@ impl Ui {
 
         frame.render_widget(input, input_area);
 
-        // chat area
         if let Some(chat_area) = chat_area {
+            let mut i = 1;
             let msgs = messages
                 .iter()
                 .map(|msgs| {
-                    let content = Line::from(Line::from(format!("{}", msgs)));
+                    let content = Line::from(Line::from(format!("{i}|{}", msgs)));
+                    i += 1;
                     content
                 })
                 .collect::<Vec<Line>>();
+            // TODO the app will broke in chat_area if the detailed message is long
+            // NOTE maybe i'll disable wrapping cuz i don't wanna really get into ui stuff
+            // NOTE maybe when you disable wrapping make a pop out window of message to long
+            // NOTE maybe make user name tiny and reduce by one character max user input to fit
+            // input length, so no need for wrapping
+
+            // chat_area is the one that moves (your pov)
+            let offset = if messages.len()
+                <= chat_area
+                    .height
+                    .saturating_sub(CHAT_AREA_BOTH_BORDERS_HIEGHT + TITLE_HEIGTH)
+                    .into()
+            {
+                0
+                // general scrolling
+            } else {
+                self.vertical_scrolling.get_position()
+            };
+
             let chat_block = Paragraph::new(msgs)
-                .scroll((
-                    (self.vertical_scrolling.get_position().saturating_sub(10)) as u16,
-                    0 as u16,
-                ))
+                .scroll((offset as u16, 0 as u16))
                 .cyan()
-                .wrap(Wrap { trim: true })
                 .block(Block::bordered().title("Messages"));
 
             frame.render_widget(chat_block, chat_area);
