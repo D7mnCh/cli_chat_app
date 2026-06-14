@@ -102,6 +102,11 @@ impl Input {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.buffer.clear();
+        self.reset_cursor();
+    }
+
     pub const fn reset_cursor(&mut self) {
         self.character_index = 0;
     }

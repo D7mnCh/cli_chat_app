@@ -1,12 +1,12 @@
 use crate::{
     client::{
+        channels::{create_channels, ChannelReceivers},
         client_messages::ClientMessages,
         network::{Client, ServerState},
         ui::{InputMode, InputState, Ui, TERMINAL_HEIGHT, TERMINAL_WIDTH},
     },
     shared_utils::{LockClean, NameValidation},
 };
-use std::sync::mpsc::{self};
 use std::{
     io::Error,
     sync::{Arc, Mutex},
@@ -19,19 +19,12 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::DefaultTerminal;
 
-pub fn send_msg_to_local_history(
-    messages: &mut Vec<String>,
-    client_name: &mut String,
-    input_buffer: &mut String,
-) {
-    let detailed_msg = format!("{}: {}", client_name, input_buffer);
-    messages.push(detailed_msg);
-}
-
 pub struct App {
     ui: Ui,
-    pub client: Client,
-    pub messages: Arc<Mutex<Vec<String>>>,
+    client: Client,
+    messages: Arc<Mutex<Vec<String>>>,
+    // Option cuz i can't build Receiver<T> with Sender<T> on new method
+    channel_receivers: Option<ChannelReceivers>,
 }
 
 impl App {
@@ -43,21 +36,25 @@ impl App {
             ui,
             client,
             messages: Default::default(),
+            channel_receivers: None,
         }
     }
 
-    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<(), Error> {
-        let _ = self.client.connect();
-        let (server_state_tx, server_state_rx) = mpsc::channel::<ServerState>();
-        let (name_validation_tx, name_validation_rx) = mpsc::channel::<NameValidation>();
-        let (new_message_tx, new_message_rx) = mpsc::channel::<bool>();
-        let _ = self.client.handle_msgs(
-            Arc::clone(&self.messages),
-            server_state_tx,
-            name_validation_tx,
-            new_message_tx,
-        );
+    fn send_msg_to_local_history(&self) {
+        let detailed_msg = format!("{}: {}", self.client.name, self.ui.input.buffer);
+        self.messages.lock_mutex().push(detailed_msg);
+    }
 
+    pub fn init_networking(&mut self) {
+        let _ = self.client.connect();
+
+        let (sender, receiver) = create_channels();
+        self.channel_receivers = Some(receiver);
+
+        let _ = self.client.handle_msgs(Arc::clone(&self.messages), sender);
+    }
+
+    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<(), Error> {
         loop {
             match &self.client.networking.server_state {
                 ServerState::Connected(_) => {
@@ -76,15 +73,19 @@ impl App {
                     })?;
 
                     // check if server disconnected
-                    if let Ok(_) = server_state_rx.try_recv() {
-                        self.client.networking.server_state = ServerState::Disconnected;
-                        continue;
+                    if let Some(ref channel_receivers) = self.channel_receivers {
+                        if channel_receivers.server_state_rx.try_recv().is_ok() {
+                            self.client.networking.server_state = ServerState::Disconnected;
+                            continue;
+                        }
                     }
 
                     // check for a new message
-                    if let Ok(true) = new_message_rx.try_recv() {
-                        self.ui.vertical_scrolling.last();
-                        continue;
+                    if let Some(ref channel_receivers) = self.channel_receivers {
+                        if let Ok(true) = channel_receivers.new_message_rx.try_recv() {
+                            self.ui.vertical_scrolling.last();
+                            continue;
+                        }
                     }
 
                     // 200millis to prevent 100% CPU core usage
@@ -112,7 +113,11 @@ impl App {
                                                     .serialize();
                                             self.client.networking.send_to_server(&serialized_msg);
 
-                                            let prgh: Option<Paragraph> = match name_validation_rx
+                                            let prgh: Option<Paragraph> = match self
+                                                .channel_receivers
+                                                .as_ref()
+                                                .unwrap()
+                                                .name_validation_rx
                                                 .recv()
                                                 .expect("[Error]:the reader thread get killed")
                                             {
@@ -120,29 +125,25 @@ impl App {
                                                     Ui::name_err_msg(&NameValidation::Empty)
                                                 }
                                                 NameValidation::Reserved => {
-                                                    self.ui.input.buffer.clear();
-                                                    self.ui.input.reset_cursor();
+                                                    self.ui.input.clear();
                                                     Ui::name_err_msg(&NameValidation::Reserved)
                                                 }
                                                 NameValidation::IllegalChar(c) => {
-                                                    self.ui.input.buffer.clear();
-                                                    self.ui.input.reset_cursor();
+                                                    self.ui.input.clear();
                                                     Ui::name_err_msg(&NameValidation::IllegalChar(
                                                         c,
                                                     ))
                                                 }
 
                                                 NameValidation::Used => {
-                                                    self.ui.input.buffer.clear();
-                                                    self.ui.input.reset_cursor();
+                                                    self.ui.input.clear();
                                                     Ui::name_err_msg(&NameValidation::Used)
                                                 }
                                                 NameValidation::Valid(received_name) => {
                                                     self.client.name = received_name.clone();
                                                     self.ui.input_state = InputState::Chatting;
 
-                                                    self.ui.input.buffer.clear();
-                                                    self.ui.input.reset_cursor();
+                                                    self.ui.input.clear();
                                                     Ui::name_err_msg(&NameValidation::Valid(
                                                         received_name,
                                                     ))
@@ -151,30 +152,23 @@ impl App {
 
                                             if let Some(error_msg) = prgh {
                                                 terminal.draw(|frame| {
-                                                    frame.render_widget(error_msg, frame.area());
+                                                    let error_area =
+                                                        self.ui.get_window_center_area(frame);
+                                                    frame.render_widget(error_msg, error_area);
                                                 })?;
                                                 thread::sleep(Duration::from_millis(1700));
                                             }
                                             continue;
                                         }
                                         InputState::Chatting => {
-                                            if self.ui.input.buffer == "/quit" {
-                                                self.client.disconnected();
-                                                return Ok(());
-                                            }
                                             if self.ui.input.buffer.is_empty()
-                                                || self.ui.input.buffer.trim() == String::new()
+                                                || self.ui.input.buffer.trim().is_empty()
                                             {
-                                                self.ui.input.buffer.clear();
-                                                self.ui.input.reset_cursor();
+                                                self.ui.input.clear();
                                                 continue;
                                             }
 
-                                            send_msg_to_local_history(
-                                                &mut self.messages.lock_mutex(),
-                                                &mut self.client.name,
-                                                &mut self.ui.input.buffer,
-                                            );
+                                            self.send_msg_to_local_history();
 
                                             // last method gonna put me on last message that is based on
                                             //the prev max pos, so i need to update it
@@ -188,8 +182,7 @@ impl App {
                                             .serialize();
                                             self.client.networking.send_to_server(&serialized_msg);
 
-                                            self.ui.input.buffer.clear();
-                                            self.ui.input.reset_cursor();
+                                            self.ui.input.clear();
                                         }
                                     },
 
