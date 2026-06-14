@@ -285,11 +285,9 @@ impl Ui {
                     content
                 })
                 .collect::<Vec<Line>>();
-            // TODO the app will broke in chat_area if the detailed message is long
-            // NOTE maybe i'll disable wrapping cuz i don't wanna really get into ui stuff
-            // NOTE maybe when you disable wrapping make a pop out window of message to long
-            // NOTE maybe make user name tiny and reduce by one character max user input to fit
-            // input length, so no need for wrapping
+            // TODO make name length limit (8 chars)
+            // TODO make message length limit (current is way bigger that doesn't fit the length of chat_area)
+            // TODO when resizing and content length > 0, update content length
 
             // chat_area is the one that moves (your pov)
             let offset = if messages.len()
@@ -303,6 +301,12 @@ impl Ui {
             } else {
                 self.vertical_scrolling.get_position()
             };
+
+            // the scrolling bar will over pass the messages when resizing, if the scrolling
+            // bar is on bottom or near it
+            if self.vertical_scrolling.get_position() > self.max_scrolling_pos {
+                self.vertical_scrolling.last()
+            }
 
             let chat_block = Paragraph::new(msgs)
                 .scroll((offset as u16, 0 as u16))
