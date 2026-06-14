@@ -67,7 +67,7 @@ impl App {
                             || frame.area().height < TERMINAL_HEIGHT
                         {
                             let warning = self.ui.window_warning_msgs(&frame);
-                            let warning_area = self.ui.get_window_warning_area(&frame);
+                            let warning_area = self.ui.get_window_center_area(&frame);
 
                             frame.render_widget(warning, warning_area);
                         } else {
@@ -194,7 +194,7 @@ impl App {
                                     },
 
                                     KeyCode::Char(to_insert) => {
-                                        self.ui.input.enter_char(to_insert);
+                                        self.ui.input.enter_char(to_insert, &self.ui.input_state);
                                     }
                                     KeyCode::Esc => self.ui.input.mode = InputMode::Normal,
                                     KeyCode::Backspace => self.ui.input.delete_char(),

@@ -5,8 +5,8 @@ use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use ratatui::Frame;
 
-pub const TERMINAL_WIDTH: u16 = 100;
-pub const TERMINAL_HEIGHT: u16 = 24;
+pub const TERMINAL_WIDTH: u16 = 119;
+pub const TERMINAL_HEIGHT: u16 = 29;
 
 // need to substract borders height + and title height from chat area height
 //to get the inner chat area height (client pov)
@@ -62,8 +62,12 @@ impl Input {
     }
 
     // the pos of the new character is based on the string
-    pub fn enter_char(&mut self, new_char: char) {
-        if self.character_index < (TERMINAL_WIDTH - 3).into() {
+    pub fn enter_char(&mut self, new_char: char, input_state: &InputState) {
+        let max_chars = match input_state {
+            InputState::EnterName => 7 as usize,
+            InputState::Chatting => (TERMINAL_WIDTH - 14) as usize,
+        };
+        if self.character_index < max_chars {
             let index = self.byte_index();
             self.buffer.insert(index, new_char);
             self.move_cursor_right();
@@ -128,15 +132,15 @@ impl Ui {
     // TODO understand the logic behind this method
     // NOTE LLM generate this code, i think if i can understand it
     //elememnt positioning will become easy
-    pub fn get_window_warning_area(&self, frame: &Frame) -> Rect {
+    pub fn get_window_center_area(&self, frame: &Frame) -> Rect {
         let area = frame.area();
-        let warning_area = Rect::new(
+        let center_area = Rect::new(
             area.width.saturating_sub(50) / 2,
             area.height.saturating_sub(8) / 2,
             50,
             6,
         );
-        warning_area
+        center_area
     }
 
     pub fn window_warning_msgs(&self, frame: &Frame) -> Paragraph<'_> {
@@ -148,7 +152,10 @@ impl Ui {
                 frame.area().height
             )),
             Line::from("Needed for current config:"),
-            Line::from("Width = 100 Height = 24"),
+            Line::from(format!(
+                "Width = {} Height = {}",
+                TERMINAL_WIDTH, TERMINAL_HEIGHT
+            )),
         ];
         Paragraph::new(warning_msgs)
             .centered()
@@ -285,9 +292,6 @@ impl Ui {
                     content
                 })
                 .collect::<Vec<Line>>();
-            // TODO make name length limit (8 chars)
-            // TODO make message length limit (current is way bigger that doesn't fit the length of chat_area)
-            // TODO when resizing and content length > 0, update content length
 
             // chat_area is the one that moves (your pov)
             let offset = if messages.len()
