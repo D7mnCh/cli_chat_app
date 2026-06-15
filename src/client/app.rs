@@ -1,16 +1,19 @@
+use super::{
+    channels::{create_channels, ChannelReceivers},
+    client_messages::ClientMessages,
+    network::{Client, ServerState},
+    ui::{InputMode, InputState, RenderingEvents, Ui},
+};
+
 use crate::{
-    client::{
-        channels::{create_channels, ChannelReceivers},
-        client_messages::ClientMessages,
-        network::{Client, ServerState},
-        ui::{InputMode, InputState, Ui, TERMINAL_HEIGHT, TERMINAL_WIDTH},
-    },
+    client::ui::{TERMINAL_HEIGHT, TERMINAL_WIDTH},
     shared_utils::{LockClean, NameValidation},
 };
+
 use std::{
     io::Error,
     sync::{Arc, Mutex},
-    thread,
+    thread::sleep,
     time::Duration,
 };
 
@@ -23,7 +26,7 @@ pub struct App {
     ui: Ui,
     client: Client,
     messages: Arc<Mutex<Vec<String>>>,
-    // Option cuz i can't build Receiver<T> with Sender<T> on new method
+    // Option cuz i can't build Receiver<T> with Sender<T> on app's new method
     channel_receivers: Option<ChannelReceivers>,
 }
 
@@ -40,11 +43,6 @@ impl App {
         }
     }
 
-    fn send_msg_to_local_history(&self) {
-        let detailed_msg = format!("{}: {}", self.client.name, self.ui.input.buffer);
-        self.messages.lock_mutex().push(detailed_msg);
-    }
-
     pub fn init_networking(&mut self) {
         let _ = self.client.connect();
 
@@ -54,23 +52,149 @@ impl App {
         let _ = self.client.handle_msgs(Arc::clone(&self.messages), sender);
     }
 
+    fn send_msg_to_local_history(&self) {
+        let detailed_msg = format!("{}: {}", self.client.name, self.ui.input.buffer);
+        self.messages.lock_mutex().push(detailed_msg);
+    }
+
+    fn handle_enter_name(&mut self) {
+        self.client.name = self.ui.input.buffer.clone();
+
+        let serialized_msg = ClientMessages::CheckName(self.client.name.clone()).serialize();
+        self.client.networking.send_to_server(&serialized_msg);
+
+        match self
+            .channel_receivers
+            .as_ref()
+            .unwrap()
+            .name_validation_rx
+            .recv()
+            .expect("[Error]:the reader thread get killed")
+        {
+            NameValidation::Empty => {
+                self.ui.rendering_events =
+                    Some(RenderingEvents::NameValidationError(NameValidation::Empty))
+            }
+            NameValidation::Reserved => {
+                self.ui.input.clear();
+                self.ui.rendering_events = Some(RenderingEvents::NameValidationError(
+                    NameValidation::Reserved,
+                ))
+            }
+            NameValidation::IllegalChar(c) => {
+                self.ui.input.clear();
+                self.ui.rendering_events = Some(RenderingEvents::NameValidationError(
+                    NameValidation::IllegalChar(c),
+                ))
+            }
+
+            NameValidation::Used => {
+                self.ui.input.clear();
+                self.ui.rendering_events =
+                    Some(RenderingEvents::NameValidationError(NameValidation::Used))
+            }
+            NameValidation::Valid(received_name) => {
+                self.client.name = received_name.clone();
+                self.ui.input_state = InputState::Chatting;
+
+                self.ui.input.clear();
+                self.ui.rendering_events = Some(RenderingEvents::NameValidationError(
+                    NameValidation::Valid(received_name),
+                ))
+            }
+        };
+    }
+
+    fn handle_chat(&mut self) {
+        if self.ui.input.buffer.is_empty() || self.ui.input.buffer.trim().is_empty() {
+            self.ui.input.clear();
+            return;
+        }
+
+        self.send_msg_to_local_history();
+
+        // last method gonna put me on the last message that is based on
+        //the prev max scrolling pos, so i need to update it
+        self.ui.updating_max_scroll_pos();
+        self.ui.vertical_scrolling.last();
+
+        let serialized_msg = ClientMessages::Chat {
+            sender: self.client.name.clone(),
+            content: self.ui.input.buffer.clone(),
+        }
+        .serialize();
+        self.client.networking.send_to_server(&serialized_msg);
+
+        self.ui.input.clear();
+    }
+
+    fn handle_pressing_enter(&mut self) {
+        match self.ui.input_state {
+            InputState::EnterName => self.handle_enter_name(),
+            InputState::Chatting => self.handle_chat(),
+        }
+    }
+
+    fn render_app(&mut self, terminal: &mut DefaultTerminal) -> Result<(), Error> {
+        terminal.draw(|frame| {
+            if frame.area().width < TERMINAL_WIDTH || frame.area().height < TERMINAL_HEIGHT {
+                self.ui.rendering_events = Some(RenderingEvents::MustResizingWarrning);
+            } else {
+                self.ui.rendering_events = None;
+            }
+
+            match &self.ui.rendering_events {
+                None => self.ui.render_chat(frame, &mut self.messages.lock_mutex()),
+                Some(RenderingEvents::MustResizingWarrning) => self.ui.render_must_resize(frame),
+                Some(RenderingEvents::NameValidationError(name_validation)) => {
+                    match name_validation {
+                        NameValidation::Empty => {
+                            self.ui
+                                .render_name_not_valid_error(&NameValidation::Empty, frame);
+                        }
+                        NameValidation::Reserved => {
+                            self.ui.input.clear();
+                            self.ui
+                                .render_name_not_valid_error(&NameValidation::Reserved, frame);
+                        }
+                        NameValidation::IllegalChar(c) => {
+                            self.ui.input.clear();
+                            self.ui.render_name_not_valid_error(
+                                &NameValidation::IllegalChar(c.to_owned()),
+                                frame,
+                            );
+                        }
+                        NameValidation::Used => {
+                            self.ui.input.clear();
+                            self.ui
+                                .render_name_not_valid_error(&NameValidation::Used, frame);
+                        }
+                        NameValidation::Valid(received_name) => {
+                            self.client.name = received_name.clone();
+                            self.ui.input_state = InputState::Chatting;
+
+                            self.ui.input.clear();
+                            self.ui.render_name_not_valid_error(
+                                &NameValidation::Valid(received_name.to_owned()),
+                                frame,
+                            );
+                        }
+                    }
+                }
+            }
+
+            if self.ui.rendering_events.is_some() {
+                sleep(Duration::from_millis(1700));
+            }
+        })?;
+        Ok(())
+    }
+
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<(), Error> {
         loop {
             match &self.client.networking.server_state {
                 ServerState::Connected(_) => {
-                    // if you used other terminla.draw method it will make like another buffer to draw on
-                    terminal.draw(|frame| {
-                        if frame.area().width < TERMINAL_WIDTH
-                            || frame.area().height < TERMINAL_HEIGHT
-                        {
-                            let warning = self.ui.window_warning_msgs(&frame);
-                            let warning_area = self.ui.get_window_center_area(&frame);
-
-                            frame.render_widget(warning, warning_area);
-                        } else {
-                            self.ui.render(frame, &mut self.messages.lock_mutex());
-                        }
-                    })?;
+                    self.render_app(terminal)?;
 
                     // check if server disconnected
                     if let Some(ref channel_receivers) = self.channel_receivers {
@@ -81,12 +205,15 @@ impl App {
                     }
 
                     // check for a new message
+                    // TODO i think you can redisgn this
                     if let Some(ref channel_receivers) = self.channel_receivers {
                         if let Ok(true) = channel_receivers.new_message_rx.try_recv() {
                             self.ui.vertical_scrolling.last();
                             continue;
                         }
                     }
+
+                    // check if resize is acceptable
 
                     // 200millis to prevent 100% CPU core usage
                     if event::poll(Duration::from_millis(200))? {
@@ -104,87 +231,7 @@ impl App {
                                 },
 
                                 InputMode::Editing => match key.code {
-                                    KeyCode::Enter => match self.ui.input_state {
-                                        InputState::EnterName => {
-                                            self.client.name = self.ui.input.buffer.clone();
-
-                                            let serialized_msg =
-                                                ClientMessages::CheckName(self.client.name.clone())
-                                                    .serialize();
-                                            self.client.networking.send_to_server(&serialized_msg);
-
-                                            let prgh: Option<Paragraph> = match self
-                                                .channel_receivers
-                                                .as_ref()
-                                                .unwrap()
-                                                .name_validation_rx
-                                                .recv()
-                                                .expect("[Error]:the reader thread get killed")
-                                            {
-                                                NameValidation::Empty => {
-                                                    Ui::name_err_msg(&NameValidation::Empty)
-                                                }
-                                                NameValidation::Reserved => {
-                                                    self.ui.input.clear();
-                                                    Ui::name_err_msg(&NameValidation::Reserved)
-                                                }
-                                                NameValidation::IllegalChar(c) => {
-                                                    self.ui.input.clear();
-                                                    Ui::name_err_msg(&NameValidation::IllegalChar(
-                                                        c,
-                                                    ))
-                                                }
-
-                                                NameValidation::Used => {
-                                                    self.ui.input.clear();
-                                                    Ui::name_err_msg(&NameValidation::Used)
-                                                }
-                                                NameValidation::Valid(received_name) => {
-                                                    self.client.name = received_name.clone();
-                                                    self.ui.input_state = InputState::Chatting;
-
-                                                    self.ui.input.clear();
-                                                    Ui::name_err_msg(&NameValidation::Valid(
-                                                        received_name,
-                                                    ))
-                                                }
-                                            };
-
-                                            if let Some(error_msg) = prgh {
-                                                terminal.draw(|frame| {
-                                                    let error_area =
-                                                        self.ui.get_window_center_area(frame);
-                                                    frame.render_widget(error_msg, error_area);
-                                                })?;
-                                                thread::sleep(Duration::from_millis(1700));
-                                            }
-                                            continue;
-                                        }
-                                        InputState::Chatting => {
-                                            if self.ui.input.buffer.is_empty()
-                                                || self.ui.input.buffer.trim().is_empty()
-                                            {
-                                                self.ui.input.clear();
-                                                continue;
-                                            }
-
-                                            self.send_msg_to_local_history();
-
-                                            // last method gonna put me on last message that is based on
-                                            //the prev max pos, so i need to update it
-                                            self.ui.updating_max_scroll_pos();
-                                            self.ui.vertical_scrolling.last();
-
-                                            let serialized_msg = ClientMessages::Chat {
-                                                sender: self.client.name.clone(),
-                                                content: self.ui.input.buffer.clone(),
-                                            }
-                                            .serialize();
-                                            self.client.networking.send_to_server(&serialized_msg);
-
-                                            self.ui.input.clear();
-                                        }
-                                    },
+                                    KeyCode::Enter => self.handle_pressing_enter(),
 
                                     KeyCode::Char(to_insert) => {
                                         self.ui.input.enter_char(to_insert, &self.ui.input_state);
@@ -203,6 +250,7 @@ impl App {
                         }
                     }
                 }
+
                 ServerState::Disconnected => {
                     let paragraph = Paragraph::new("server is not running at the moment")
                         .centered()

@@ -1,3 +1,6 @@
+use std::thread::sleep;
+use std::time::Duration;
+
 use crate::shared_utils::NameValidation;
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::style::{Color, Style, Stylize};
@@ -32,11 +35,19 @@ pub enum _Logging {
     MessagesHistory,
 }
 
+// used to notify Ui from app
+#[derive(PartialEq)]
+pub enum RenderingEvents {
+    NameValidationError(NameValidation),
+    MustResizingWarrning,
+}
+
 pub struct Ui {
     pub input: Input,
     pub input_state: InputState,
     pub vertical_scrolling: ScrollbarState,
     pub max_scrolling_pos: usize,
+    pub rendering_events: Option<RenderingEvents>,
 }
 
 pub struct Input {
@@ -123,6 +134,7 @@ impl Ui {
             input_state: InputState::EnterName,
             vertical_scrolling: ScrollbarState::new(0),
             max_scrolling_pos: 0,
+            rendering_events: None,
         }
     }
 
@@ -146,25 +158,6 @@ impl Ui {
             6,
         );
         center_area
-    }
-
-    pub fn window_warning_msgs(&self, frame: &Frame) -> Paragraph<'_> {
-        let warning_msgs = vec![
-            Line::from("Terminal size to small"),
-            Line::from(format!(
-                "Width = {} Height = {}",
-                frame.area().width,
-                frame.area().height
-            )),
-            Line::from("Needed for current config:"),
-            Line::from(format!(
-                "Width = {} Height = {}",
-                TERMINAL_WIDTH, TERMINAL_HEIGHT
-            )),
-        ];
-        Paragraph::new(warning_msgs)
-            .centered()
-            .block(Block::bordered().title_top(Line::from("Warning").centered().yellow()))
     }
 
     fn render_vertical_scrollbar(
@@ -197,38 +190,76 @@ impl Ui {
         );
     }
 
-    pub fn name_err_msg<'a>(state: &NameValidation) -> Option<Paragraph<'a>> {
-        match state {
+    //NOTE (BUG) messages doesn't popout, but namevalidation logic is fine
+    pub fn render_name_not_valid_error<'a>(
+        &self,
+        name_validation_state: &NameValidation,
+        frame: &mut Frame,
+    ) {
+        match name_validation_state {
             NameValidation::Reserved => {
-                Some(Paragraph::new("Name used by server").centered().block(
+                let error_msg = Paragraph::new("Name used by server").centered().block(
                     Block::bordered().title_top(Line::from("Reserved name").centered().yellow()),
-                ))
+                );
+                let error_area = self.get_window_center_area(&frame);
+                frame.render_widget(error_msg, error_area);
             }
-            NameValidation::Empty => Some(
-                Paragraph::new("No name entered")
+            NameValidation::Empty => {
+                let error_msg = Paragraph::new("No name entered")
                     .block(
                         Block::bordered().title_top(Line::from("Invalid name").centered().yellow()),
                     )
-                    .centered(),
-            ),
-            NameValidation::Used => Some(
-                Paragraph::new("Other user is using this name")
+                    .centered();
+                let error_area = self.get_window_center_area(&frame);
+                frame.render_widget(error_msg, error_area);
+            }
+            NameValidation::Used => {
+                let error_msg = Paragraph::new("Other user is using this name")
                     .block(Block::bordered().title_top(Line::from("Used name").centered().yellow()))
-                    .centered(),
-            ),
-            NameValidation::IllegalChar(':') => Some(
-                Paragraph::new("Entered illegalchar \":\"")
+                    .centered();
+                let error_area = self.get_window_center_area(&frame);
+                frame.render_widget(error_msg, error_area);
+            }
+            NameValidation::IllegalChar(':') => {
+                let error_msg = Paragraph::new("Entered illegalchar \":\"")
                     .block(
                         Block::bordered().title_top(Line::from("Illegal char").centered().yellow()),
                     )
-                    .centered(),
-            ),
-            NameValidation::Valid(_) => None,
-            NameValidation::IllegalChar(_) => None,
+                    .centered();
+                let error_area = self.get_window_center_area(&frame);
+                frame.render_widget(error_msg, error_area);
+            }
+            _ => {}
         }
     }
 
-    pub fn render(&mut self, frame: &mut Frame, messages: &mut Vec<String>) {
+    pub fn render_must_resize(&mut self, frame: &mut Frame) {
+        let warning_msg = vec![
+            Line::from("Terminal size to small"),
+            Line::from(format!(
+                "Width = {} Height = {}",
+                frame.area().width,
+                frame.area().height
+            )),
+            Line::from("Needed for current config:"),
+            Line::from(format!(
+                "Width = {} Height = {}",
+                TERMINAL_WIDTH, TERMINAL_HEIGHT
+            )),
+        ];
+        let warning_msg = Paragraph::new(warning_msg)
+            .centered()
+            .block(Block::bordered().title_top(Line::from("Warning").centered().yellow()));
+
+        let warning_area = self.get_window_center_area(&frame);
+
+        frame.render_widget(warning_msg, warning_area);
+    }
+
+    // NOTE do i include super in every pub i made ?
+    // NOTE also search for what should i add for (pub(what should i add here) mod app)
+    pub(super) fn render_chat(&mut self, frame: &mut Frame, messages: &mut Vec<String>) {
+        // i think this logic must be on app, and then use match
         let (help_area, input_area, chat_area) = match self.input_state {
             InputState::EnterName => {
                 let layout = Layout::vertical([Constraint::Length(1), Constraint::Length(3)]);

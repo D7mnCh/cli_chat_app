@@ -1,5 +1,6 @@
+// client.rs from bin/ will only use app
 pub mod app;
-mod channels;
-mod client_messages;
-mod network;
-mod ui;
+pub(super) mod channels;
+pub(super) mod client_messages;
+pub(super) mod network;
+pub(super) mod ui;

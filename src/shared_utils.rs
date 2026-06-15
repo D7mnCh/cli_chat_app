@@ -1,6 +1,6 @@
 use std::sync::{Mutex, MutexGuard};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum NameValidation {
     Empty,
     Reserved,
