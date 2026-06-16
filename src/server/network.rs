@@ -39,7 +39,7 @@ impl Server {
                                 if chat_sender != client_name {
                                     let _ = client_stream
                                         .write_all((trimed_msg.to_owned() + "\n").as_bytes());
-                                    //println!("[Info]:sending chat to {client_name}: {trimed_msg}");
+                                    println!("[Info]:sending {trimed_msg} to {client_name}");
                                 }
                             }
                         }
@@ -49,11 +49,11 @@ impl Server {
                 }
             }
 
-            for (_client_name, client_stream) in clients.iter_mut() {
+            for (client_name, client_stream) in clients.iter_mut() {
                 let _ = client_stream.write_all((trimed_msg.to_owned() + "\n").as_bytes());
-                //println!(
-                //    "[Info]:sending event or chat or name validity to {client_name}: {trimed_msg}"
-                //);
+                println!(
+                    "[Info]:sending event or chat or name validity to {client_name}: {trimed_msg}"
+                );
             }
         }
     }
@@ -104,8 +104,7 @@ impl Server {
 
                                 let mut raw_message = [0; 1024];
                                 match s.read(&mut raw_message) {
-                                    // if client program crush (it will send 0 byte as a result), if
-                                    // yes then break his stream loop
+                                    // if client program crush or disconnected (it will send 0 byte as a result)
                                     Ok(0) => {
                                         if let Some(ref client_name) = client_name {
                                             full_serialized_msg.push_str(
@@ -128,6 +127,7 @@ impl Server {
                                         break Ok(());
                                     }
 
+                                    // TODO intoduce some method
                                     Ok(bytes_read) => {
                                         let message_buffer =
                                             str::from_utf8(&raw_message[..bytes_read])

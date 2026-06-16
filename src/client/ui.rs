@@ -1,6 +1,3 @@
-use std::thread::sleep;
-use std::time::Duration;
-
 use crate::shared_utils::NameValidation;
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::style::{Color, Style, Stylize};
@@ -40,6 +37,7 @@ pub enum _Logging {
 pub enum RenderingEvents {
     NameValidationError(NameValidation),
     MustResizingWarrning,
+    ServerDisconnected,
 }
 
 pub struct Ui {
@@ -78,6 +76,7 @@ impl Input {
             InputState::EnterName => 7 as usize,
             InputState::Chatting => (TERMINAL_WIDTH - 14) as usize,
         };
+
         if self.character_index < max_chars {
             let index = self.byte_index();
             self.buffer.insert(index, new_char);
@@ -190,50 +189,41 @@ impl Ui {
         );
     }
 
-    //NOTE (BUG) messages doesn't popout, but namevalidation logic is fine
-    pub fn render_name_not_valid_error<'a>(
+    // NOTE (BUG) messages doesn't popout, but namevalidation logic is fine
+    pub fn render_name_not_valid_error_window(
         &self,
         name_validation_state: &NameValidation,
         frame: &mut Frame,
     ) {
-        match name_validation_state {
-            NameValidation::Reserved => {
-                let error_msg = Paragraph::new("Name used by server").centered().block(
-                    Block::bordered().title_top(Line::from("Reserved name").centered().yellow()),
-                );
-                let error_area = self.get_window_center_area(&frame);
-                frame.render_widget(error_msg, error_area);
-            }
-            NameValidation::Empty => {
-                let error_msg = Paragraph::new("No name entered")
-                    .block(
-                        Block::bordered().title_top(Line::from("Invalid name").centered().yellow()),
-                    )
-                    .centered();
-                let error_area = self.get_window_center_area(&frame);
-                frame.render_widget(error_msg, error_area);
-            }
-            NameValidation::Used => {
-                let error_msg = Paragraph::new("Other user is using this name")
-                    .block(Block::bordered().title_top(Line::from("Used name").centered().yellow()))
-                    .centered();
-                let error_area = self.get_window_center_area(&frame);
-                frame.render_widget(error_msg, error_area);
-            }
-            NameValidation::IllegalChar(':') => {
-                let error_msg = Paragraph::new("Entered illegalchar \":\"")
-                    .block(
-                        Block::bordered().title_top(Line::from("Illegal char").centered().yellow()),
-                    )
-                    .centered();
-                let error_area = self.get_window_center_area(&frame);
-                frame.render_widget(error_msg, error_area);
-            }
-            _ => {}
-        }
+        let error_area = self.get_window_center_area(&frame);
+
+        let error_msg = match name_validation_state {
+            NameValidation::Reserved => Paragraph::new("Name used by server").centered().block(
+                Block::bordered().title_top(Line::from("Reserved name").centered().yellow()),
+            ),
+            NameValidation::Empty => Paragraph::new("No name entered")
+                .block(Block::bordered().title_top(Line::from("Invalid name").centered().yellow()))
+                .centered(),
+            NameValidation::Used => Paragraph::new("Other user is using this name")
+                .block(Block::bordered().title_top(Line::from("Used name").centered().yellow()))
+                .centered(),
+            NameValidation::IllegalChar(':') => Paragraph::new("Entered illegalchar \":\"")
+                .block(Block::bordered().title_top(Line::from("Illegal char").centered().yellow()))
+                .centered(),
+            _ => unreachable!(),
+        };
+        frame.render_widget(error_msg, error_area);
     }
 
-    pub fn render_must_resize(&mut self, frame: &mut Frame) {
+    pub fn render_server_is_disconnected_window(&mut self, frame: &mut Frame) {
+        let paragraph = Paragraph::new("server is not running at the moment")
+            .centered()
+            .block(Block::bordered().title_top(Line::from("Error").centered().yellow()));
+        let error_area = self.get_window_center_area(frame);
+        frame.render_widget(paragraph, error_area);
+    }
+
+    pub fn render_must_resize_window(&mut self, frame: &mut Frame) {
         let warning_msg = vec![
             Line::from("Terminal size to small"),
             Line::from(format!(

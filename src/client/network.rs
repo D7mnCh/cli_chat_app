@@ -27,6 +27,7 @@ impl Networking {
     pub fn new() -> Self {
         Self {
             addr: SocketAddr::from((Ipv4Addr::new(0, 0, 0, 0), 7878)),
+            //addr: SocketAddr::from((Ipv4Addr::new(192, 168, 100, 3), 7878)),
             server_state: ServerState::Disconnected,
         }
     }

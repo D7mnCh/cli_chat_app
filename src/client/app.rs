@@ -17,9 +17,7 @@ use std::{
     time::Duration,
 };
 
-use crossterm::event::{self, KeyCode};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Paragraph};
+use crossterm::event::{self, KeyCode, KeyEvent};
 use ratatui::DefaultTerminal;
 
 pub struct App {
@@ -38,8 +36,8 @@ impl App {
         Self {
             ui,
             client,
-            messages: Default::default(),
             channel_receivers: None,
+            messages: Default::default(),
         }
     }
 
@@ -139,135 +137,116 @@ impl App {
         terminal.draw(|frame| {
             if frame.area().width < TERMINAL_WIDTH || frame.area().height < TERMINAL_HEIGHT {
                 self.ui.rendering_events = Some(RenderingEvents::MustResizingWarrning);
-            } else {
-                self.ui.rendering_events = None;
             }
 
             match &self.ui.rendering_events {
                 None => self.ui.render_chat(frame, &mut self.messages.lock_mutex()),
-                Some(RenderingEvents::MustResizingWarrning) => self.ui.render_must_resize(frame),
+                Some(RenderingEvents::ServerDisconnected) => {
+                    self.ui.render_server_is_disconnected_window(frame);
+                    self.client.disconnected();
+                    return;
+                }
+                Some(RenderingEvents::MustResizingWarrning) => {
+                    self.ui.render_must_resize_window(frame)
+                }
                 Some(RenderingEvents::NameValidationError(name_validation)) => {
-                    match name_validation {
-                        NameValidation::Empty => {
-                            self.ui
-                                .render_name_not_valid_error(&NameValidation::Empty, frame);
-                        }
-                        NameValidation::Reserved => {
-                            self.ui.input.clear();
-                            self.ui
-                                .render_name_not_valid_error(&NameValidation::Reserved, frame);
-                        }
-                        NameValidation::IllegalChar(c) => {
-                            self.ui.input.clear();
-                            self.ui.render_name_not_valid_error(
-                                &NameValidation::IllegalChar(c.to_owned()),
-                                frame,
-                            );
-                        }
-                        NameValidation::Used => {
-                            self.ui.input.clear();
-                            self.ui
-                                .render_name_not_valid_error(&NameValidation::Used, frame);
-                        }
-                        NameValidation::Valid(received_name) => {
-                            self.client.name = received_name.clone();
-                            self.ui.input_state = InputState::Chatting;
-
-                            self.ui.input.clear();
-                            self.ui.render_name_not_valid_error(
-                                &NameValidation::Valid(received_name.to_owned()),
-                                frame,
-                            );
-                        }
+                    self.ui.input.clear();
+                    if let NameValidation::Valid(received_name) = name_validation {
+                        self.client.name = received_name.clone();
+                        self.ui.input_state = InputState::Chatting;
+                    } else {
+                        // NOTE there's a bug, popout window error of name not valid not showing
+                        self.ui
+                            .render_name_not_valid_error_window(name_validation, frame);
+                        //sleep(Duration::from_millis(1200));
                     }
                 }
             }
 
             if self.ui.rendering_events.is_some() {
-                sleep(Duration::from_millis(1700));
-            }
+                self.ui.rendering_events = None;
+            };
         })?;
+        Ok(())
+    }
+
+    fn _handle_input(&mut self) {}
+
+    fn check_if_server_disconnected(&mut self) {
+        if let Some(ref channel_receivers) = self.channel_receivers {
+            if channel_receivers.server_state_rx.try_recv().is_ok() {
+                self.client.networking.server_state = ServerState::Disconnected;
+                return;
+            }
+        }
+    }
+
+    fn check_if_new_msg_arrived(&mut self) {
+        // TODO i think you can redisgn this
+        if let Some(ref channel_receivers) = self.channel_receivers {
+            if let Ok(true) = channel_receivers.new_message_rx.try_recv() {
+                self.ui.vertical_scrolling.last();
+                return;
+            }
+        }
+    }
+
+    fn handle_input_normal_mode(&mut self, key: &KeyEvent) -> Result<(), Error> {
+        match key.code {
+            KeyCode::Char('i') => self.ui.input.mode = InputMode::Editing,
+            KeyCode::Char('q') => {
+                self.client.disconnected();
+                return Ok(());
+            }
+            KeyCode::Char('k') => self.ui.vertical_scrolling.prev(),
+            KeyCode::Char('j') => self.ui.vertical_scrolling.next(),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_input_edit_mode(&mut self, key: &KeyEvent) -> Result<(), Error> {
+        match key.code {
+            KeyCode::Enter => self.handle_pressing_enter(),
+            KeyCode::Char(to_insert) => self.ui.input.enter_char(to_insert, &self.ui.input_state),
+            KeyCode::Esc => self.ui.input.mode = InputMode::Normal,
+            KeyCode::Backspace => self.ui.input.delete_char(),
+            KeyCode::Right => {
+                self.ui.input.move_cursor_right();
+            }
+            KeyCode::Left => {
+                self.ui.input.move_cursor_left();
+            }
+            _ => {}
+        }
         Ok(())
     }
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<(), Error> {
         loop {
+            self.render_app(terminal)?;
             match &self.client.networking.server_state {
                 ServerState::Connected(_) => {
-                    self.render_app(terminal)?;
-
-                    // check if server disconnected
-                    if let Some(ref channel_receivers) = self.channel_receivers {
-                        if channel_receivers.server_state_rx.try_recv().is_ok() {
-                            self.client.networking.server_state = ServerState::Disconnected;
-                            continue;
-                        }
-                    }
-
-                    // check for a new message
-                    // TODO i think you can redisgn this
-                    if let Some(ref channel_receivers) = self.channel_receivers {
-                        if let Ok(true) = channel_receivers.new_message_rx.try_recv() {
-                            self.ui.vertical_scrolling.last();
-                            continue;
-                        }
-                    }
-
-                    // check if resize is acceptable
+                    self.check_if_server_disconnected();
+                    self.check_if_new_msg_arrived();
 
                     // 200millis to prevent 100% CPU core usage
                     if event::poll(Duration::from_millis(200))? {
                         if let Some(key) = event::read()?.as_key_press_event() {
                             match self.ui.input.mode {
-                                InputMode::Normal => match key.code {
-                                    KeyCode::Char('i') => self.ui.input.mode = InputMode::Editing,
-                                    KeyCode::Char('q') => {
-                                        self.client.disconnected();
-                                        return Ok(());
-                                    }
-                                    KeyCode::Char('k') => self.ui.vertical_scrolling.prev(),
-                                    KeyCode::Char('j') => self.ui.vertical_scrolling.next(),
-                                    _ => {}
-                                },
-
-                                InputMode::Editing => match key.code {
-                                    KeyCode::Enter => self.handle_pressing_enter(),
-
-                                    KeyCode::Char(to_insert) => {
-                                        self.ui.input.enter_char(to_insert, &self.ui.input_state);
-                                    }
-                                    KeyCode::Esc => self.ui.input.mode = InputMode::Normal,
-                                    KeyCode::Backspace => self.ui.input.delete_char(),
-                                    KeyCode::Right => {
-                                        self.ui.input.move_cursor_right();
-                                    }
-                                    KeyCode::Left => {
-                                        self.ui.input.move_cursor_left();
-                                    }
-                                    _ => {}
-                                },
+                                InputMode::Normal => self.handle_input_normal_mode(&key)?,
+                                InputMode::Editing => self.handle_input_edit_mode(&key)?,
                             }
                         }
                     }
                 }
 
                 ServerState::Disconnected => {
-                    let paragraph = Paragraph::new("server is not running at the moment")
-                        .centered()
-                        .block(Block::bordered().title_top(Line::from("Error").centered()));
-                    terminal.draw(|frame| {
-                        frame.render_widget(paragraph, frame.area());
-                    })?;
-                    self.client.connect();
-
-                    if let Some(key) = event::read()?.as_key_press_event() {
-                        match key.code {
-                            KeyCode::Char(_) | KeyCode::Enter => {
-                                return Ok(());
-                            }
-                            _ => {}
-                        }
+                    if self.ui.rendering_events == Some(RenderingEvents::ServerDisconnected) {
+                        sleep(Duration::from_millis(1700));
+                        return Ok(());
                     }
+                    self.ui.rendering_events = Some(RenderingEvents::ServerDisconnected);
                 }
             }
         }
