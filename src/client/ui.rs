@@ -1,9 +1,14 @@
+use std::io::Error;
+
+use super::network::ServerState;
 use crate::shared_utils::NameValidation;
-use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
-use ratatui::style::{Color, Style, Stylize};
-use ratatui::text::{Line, Text};
-use ratatui::widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
-use ratatui::Frame;
+use ratatui::{
+    layout::{Constraint, Layout, Margin, Position, Rect},
+    style::{Color, Style, Stylize},
+    text::{Line, Text},
+    widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    {DefaultTerminal, Frame},
+};
 
 pub const TERMINAL_WIDTH: u16 = 119;
 pub const TERMINAL_HEIGHT: u16 = 29;
@@ -37,7 +42,6 @@ pub enum _Logging {
 pub enum RenderingEvents {
     NameValidationError(NameValidation),
     MustResizingWarrning,
-    ServerDisconnected,
 }
 
 pub struct Ui {
@@ -189,7 +193,6 @@ impl Ui {
         );
     }
 
-    // NOTE (BUG) messages doesn't popout, but namevalidation logic is fine
     pub fn render_name_not_valid_error_window(
         &self,
         name_validation_state: &NameValidation,
@@ -223,6 +226,36 @@ impl Ui {
         frame.render_widget(paragraph, error_area);
     }
 
+    pub fn render_app(
+        &mut self,
+        terminal: &mut DefaultTerminal,
+        messages: &Vec<String>,
+        server_state: &ServerState,
+    ) -> Result<(), Error> {
+        terminal.draw(|frame| match server_state {
+            ServerState::Connected(_) => match &self.rendering_events {
+                None => self.render_chat(frame, messages),
+
+                Some(RenderingEvents::MustResizingWarrning) => {
+                    self.render_must_resize_window(frame);
+                }
+
+                Some(RenderingEvents::NameValidationError(name_validation)) => {
+                    if let NameValidation::Valid(_) = name_validation {
+                        self.render_chat(frame, messages);
+                    } else {
+                        self.render_name_not_valid_error_window(name_validation, frame);
+                    }
+                }
+            },
+
+            ServerState::Disconnected => {
+                self.render_server_is_disconnected_window(frame);
+            }
+        })?;
+        Ok(())
+    }
+
     pub fn render_must_resize_window(&mut self, frame: &mut Frame) {
         let warning_msg = vec![
             Line::from("Terminal size to small"),
@@ -248,8 +281,7 @@ impl Ui {
 
     // NOTE do i include super in every pub i made ?
     // NOTE also search for what should i add for (pub(what should i add here) mod app)
-    pub(super) fn render_chat(&mut self, frame: &mut Frame, messages: &mut Vec<String>) {
-        // i think this logic must be on app, and then use match
+    pub(super) fn render_chat(&mut self, frame: &mut Frame, messages: &Vec<String>) {
         let (help_area, input_area, chat_area) = match self.input_state {
             InputState::EnterName => {
                 let layout = Layout::vertical([Constraint::Length(1), Constraint::Length(3)]);

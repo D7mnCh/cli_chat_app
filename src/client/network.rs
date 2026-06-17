@@ -61,7 +61,8 @@ impl Client {
 
     // if not use shutdown method and just "close the ratatui context", it will sent an error of
     //client program crushes (os error 104)
-    pub fn disconnected(&self) {
+    pub fn disconnected(&mut self) {
+        self.networking.server_state = ServerState::Disconnected;
         if let ServerState::Connected(stream) = &self.networking.server_state {
             let _ = stream.shutdown(std::net::Shutdown::Both);
         }
@@ -139,8 +140,8 @@ impl Client {
                                 }
                                 // ignore this case that could cuz from split('\n') method
                                 [""] => {}
-                                ref uknown => {
-                                    println!("[Warn]: unkown msg: {uknown:?}")
+                                ref _uknown => {
+                                    //println!("[Warn]: unkown msg: {uknown:?}")
                                 }
                             }
                         }

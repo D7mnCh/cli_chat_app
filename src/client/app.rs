@@ -11,21 +11,24 @@ use crate::{
 };
 
 use std::{
-    io::Error,
+    io::Result,
     sync::{Arc, Mutex},
     thread::sleep,
     time::Duration,
 };
 
 use crossterm::event::{self, KeyCode, KeyEvent};
-use ratatui::DefaultTerminal;
+use ratatui::{DefaultTerminal, Frame};
 
 pub struct App {
     ui: Ui,
     client: Client,
     messages: Arc<Mutex<Vec<String>>>,
     // Option cuz i can't build Receiver<T> with Sender<T> on app's new method
+    // NOTE i only get the use of the option when creating the instances, other than that,
+    // it alawys will be Some(channel_receiver)
     channel_receivers: Option<ChannelReceivers>,
+    is_running: bool,
 }
 
 impl App {
@@ -37,6 +40,7 @@ impl App {
             ui,
             client,
             channel_receivers: None,
+            is_running: false,
             messages: Default::default(),
         }
     }
@@ -133,56 +137,42 @@ impl App {
         }
     }
 
-    fn render_app(&mut self, terminal: &mut DefaultTerminal) -> Result<(), Error> {
-        terminal.draw(|frame| {
-            if frame.area().width < TERMINAL_WIDTH || frame.area().height < TERMINAL_HEIGHT {
-                self.ui.rendering_events = Some(RenderingEvents::MustResizingWarrning);
-            }
-
-            match &self.ui.rendering_events {
-                None => self.ui.render_chat(frame, &mut self.messages.lock_mutex()),
-                Some(RenderingEvents::ServerDisconnected) => {
-                    self.ui.render_server_is_disconnected_window(frame);
-                    self.client.disconnected();
-                    return;
-                }
-                Some(RenderingEvents::MustResizingWarrning) => {
-                    self.ui.render_must_resize_window(frame)
-                }
-                Some(RenderingEvents::NameValidationError(name_validation)) => {
-                    self.ui.input.clear();
-                    if let NameValidation::Valid(received_name) = name_validation {
-                        self.client.name = received_name.clone();
-                        self.ui.input_state = InputState::Chatting;
-                    } else {
-                        // NOTE there's a bug, popout window error of name not valid not showing
-                        self.ui
-                            .render_name_not_valid_error_window(name_validation, frame);
-                        //sleep(Duration::from_millis(1200));
-                    }
-                }
-            }
-
-            if self.ui.rendering_events.is_some() {
-                self.ui.rendering_events = None;
-            };
-        })?;
-        Ok(())
+    fn check_if_window_size_acceptable(&mut self, frame: &Frame) {
+        if frame.area().width < TERMINAL_WIDTH || frame.area().height < TERMINAL_HEIGHT {
+            self.ui.rendering_events = Some(RenderingEvents::MustResizingWarrning);
+        }
     }
 
-    fn _handle_input(&mut self) {}
+    // response to that event by changing states
+    fn event_response(&mut self) {
+        match &self.ui.rendering_events {
+            Some(RenderingEvents::MustResizingWarrning) => {
+                self.ui.input.mode = InputMode::Normal;
+            }
 
+            Some(RenderingEvents::NameValidationError(name_validation)) => {
+                self.ui.input.clear();
+                if let NameValidation::Valid(received_name) = name_validation {
+                    self.client.name = received_name.clone();
+                    self.ui.input_state = InputState::Chatting;
+                }
+            }
+
+            None => {}
+        }
+    }
+
+    // i'll add reconnect later, for now it always return ServerState::Disconnected
     fn check_if_server_disconnected(&mut self) {
         if let Some(ref channel_receivers) = self.channel_receivers {
-            if channel_receivers.server_state_rx.try_recv().is_ok() {
+            if let Ok(ServerState::Disconnected) = channel_receivers.server_state_rx.try_recv() {
                 self.client.networking.server_state = ServerState::Disconnected;
-                return;
+                self.client.disconnected();
             }
         }
     }
 
     fn check_if_new_msg_arrived(&mut self) {
-        // TODO i think you can redisgn this
         if let Some(ref channel_receivers) = self.channel_receivers {
             if let Ok(true) = channel_receivers.new_message_rx.try_recv() {
                 self.ui.vertical_scrolling.last();
@@ -191,11 +181,11 @@ impl App {
         }
     }
 
-    fn handle_input_normal_mode(&mut self, key: &KeyEvent) -> Result<(), Error> {
+    fn handle_input_normal_mode(&mut self, key: &KeyEvent) -> Result<()> {
         match key.code {
             KeyCode::Char('i') => self.ui.input.mode = InputMode::Editing,
             KeyCode::Char('q') => {
-                self.client.disconnected();
+                self.is_running = false;
                 return Ok(());
             }
             KeyCode::Char('k') => self.ui.vertical_scrolling.prev(),
@@ -205,7 +195,7 @@ impl App {
         Ok(())
     }
 
-    fn handle_input_edit_mode(&mut self, key: &KeyEvent) -> Result<(), Error> {
+    fn handle_input_edit_mode(&mut self, key: &KeyEvent) -> Result<()> {
         match key.code {
             KeyCode::Enter => self.handle_pressing_enter(),
             KeyCode::Char(to_insert) => self.ui.input.enter_char(to_insert, &self.ui.input_state),
@@ -222,9 +212,39 @@ impl App {
         Ok(())
     }
 
-    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<(), Error> {
-        loop {
-            self.render_app(terminal)?;
+    fn remove_events(&mut self) {
+        match &self.ui.rendering_events {
+            Some(RenderingEvents::NameValidationError(name_validation)) => {
+                if let NameValidation::Valid(_) = name_validation {
+                    self.ui.rendering_events = None;
+                } else {
+                    // keep pop out window for a few seconds to disappear
+                    sleep(Duration::from_millis(1500));
+                    self.ui.rendering_events = None;
+                }
+            }
+            Some(RenderingEvents::MustResizingWarrning) => {
+                self.ui.rendering_events = None;
+            }
+            None => {}
+        }
+    }
+
+    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
+        self.is_running = true;
+        while self.is_running {
+            self.check_if_window_size_acceptable(&terminal.get_frame());
+
+            self.event_response();
+
+            self.ui.render_app(
+                terminal,
+                &self.messages.lock_mutex(),
+                &self.client.networking.server_state,
+            )?;
+
+            self.remove_events();
+
             match &self.client.networking.server_state {
                 ServerState::Connected(_) => {
                     self.check_if_server_disconnected();
@@ -234,6 +254,8 @@ impl App {
                     if event::poll(Duration::from_millis(200))? {
                         if let Some(key) = event::read()?.as_key_press_event() {
                             match self.ui.input.mode {
+                                // NOTE BUG when pressing q, at second iteration of the loop
+                                //it'll match to disconnect variant on render_app
                                 InputMode::Normal => self.handle_input_normal_mode(&key)?,
                                 InputMode::Editing => self.handle_input_edit_mode(&key)?,
                             }
@@ -242,13 +264,11 @@ impl App {
                 }
 
                 ServerState::Disconnected => {
-                    if self.ui.rendering_events == Some(RenderingEvents::ServerDisconnected) {
-                        sleep(Duration::from_millis(1700));
-                        return Ok(());
-                    }
-                    self.ui.rendering_events = Some(RenderingEvents::ServerDisconnected);
+                    sleep(Duration::from_millis(1700));
+                    break;
                 }
             }
         }
+        Ok(())
     }
 }

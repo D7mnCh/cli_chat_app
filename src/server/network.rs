@@ -39,7 +39,6 @@ impl Server {
                                 if chat_sender != client_name {
                                     let _ = client_stream
                                         .write_all((trimed_msg.to_owned() + "\n").as_bytes());
-                                    println!("[Info]:sending {trimed_msg} to {client_name}");
                                 }
                             }
                         }
@@ -49,11 +48,8 @@ impl Server {
                 }
             }
 
-            for (client_name, client_stream) in clients.iter_mut() {
+            for (_client_name, client_stream) in clients.iter_mut() {
                 let _ = client_stream.write_all((trimed_msg.to_owned() + "\n").as_bytes());
-                println!(
-                    "[Info]:sending event or chat or name validity to {client_name}: {trimed_msg}"
-                );
             }
         }
     }
