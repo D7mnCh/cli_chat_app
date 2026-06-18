@@ -198,7 +198,9 @@ impl App {
     fn handle_input_edit_mode(&mut self, key: &KeyEvent) -> Result<()> {
         match key.code {
             KeyCode::Enter => self.handle_pressing_enter(),
-            KeyCode::Char(to_insert) => self.ui.input.enter_char(to_insert, &self.ui.input_state),
+            KeyCode::Char(to_insert) if to_insert.is_ascii() => {
+                self.ui.input.enter_char(to_insert, &self.ui.input_state)
+            }
             KeyCode::Esc => self.ui.input.mode = InputMode::Normal,
             KeyCode::Backspace => self.ui.input.delete_char(),
             KeyCode::Right => {
