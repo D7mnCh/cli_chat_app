@@ -1,5 +1,5 @@
 use super::{
-    channels::{create_channels, ChannelReceivers},
+    channels::{ChannelReceivers, create_channels},
     client_messages::ClientMessages,
     network::{Client, ServerState},
     ui::{InputMode, InputState, RenderingEvents, Ui},
@@ -140,8 +140,7 @@ impl App {
     fn check_if_window_size_acceptable(&mut self, frame: &Frame) {
         if frame.area().width < TERMINAL_WIDTH || frame.area().height < TERMINAL_HEIGHT {
             self.ui.rendering_events = Some(RenderingEvents::MustResizingWarrning);
-        }
-    }
+        }    }
 
     // response to that event by changing states
     fn event_response(&mut self) {
