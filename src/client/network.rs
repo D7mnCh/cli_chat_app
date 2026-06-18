@@ -9,6 +9,8 @@ use std::{
 };
 
 pub struct Client {
+    // didn't use &'static str, cuz when creating client instatnce, i won't have client name (empty &str)
+    //and i can't mutate &'static str after that
     pub name: String,
     pub networking: Networking,
 }

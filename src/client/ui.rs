@@ -279,9 +279,7 @@ impl Ui {
         frame.render_widget(warning_msg, warning_area);
     }
 
-    // NOTE do i include super in every pub i made ?
-    // NOTE also search for what should i add for (pub(what should i add here) mod app)
-    pub(super) fn render_chat(&mut self, frame: &mut Frame, messages: &Vec<String>) {
+    pub fn render_chat(&mut self, frame: &mut Frame, messages: &Vec<String>) {
         let (help_area, input_area, chat_area) = match self.input_state {
             InputState::EnterName => {
                 let layout = Layout::vertical([Constraint::Length(1), Constraint::Length(3)]);

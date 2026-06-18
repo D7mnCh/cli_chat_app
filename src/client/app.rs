@@ -254,8 +254,6 @@ impl App {
                     if event::poll(Duration::from_millis(200))? {
                         if let Some(key) = event::read()?.as_key_press_event() {
                             match self.ui.input.mode {
-                                // NOTE BUG when pressing q, at second iteration of the loop
-                                //it'll match to disconnect variant on render_app
                                 InputMode::Normal => self.handle_input_normal_mode(&key)?,
                                 InputMode::Editing => self.handle_input_edit_mode(&key)?,
                             }
@@ -265,7 +263,7 @@ impl App {
 
                 ServerState::Disconnected => {
                     sleep(Duration::from_millis(1700));
-                    break;
+                    self.is_running = false;
                 }
             }
         }
