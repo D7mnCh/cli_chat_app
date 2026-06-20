@@ -6,7 +6,7 @@ pub enum ClientMessages {
 impl ClientMessages {
     pub fn serialize(&self) -> String {
         match self {
-            Self::CheckName(client_name) => format!("client:name:{client_name}\n"),
+            Self::CheckName(client_name) => format!("client:check_name:{client_name}\n"),
             Self::Chat { sender, content } => format!("client:chat:{sender}:{content}"),
         }
     }

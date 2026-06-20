@@ -1,8 +1,9 @@
-use crate::client::channels::ChannelSenders;
-use crate::shared_utils::{LockClean, NameValidation};
+use super::channels::ChannelSenders;
+use crate::shared_utils::{LockClean, NameValidation, ServerMessage};
+use std::io::{BufRead, BufReader};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::{
-    io::{self, Read, Write},
+    io::{self, Write},
     sync::{Arc, Mutex},
     thread,
     time::Duration,
@@ -61,7 +62,7 @@ impl Client {
     }
 
     // if not use shutdown method and just "close the ratatui context", it will sent an error of
-    //client program crushes (os error 104)
+    //client program crashes (os error 104), don't know if same error for both linux and windows
     pub fn disconnected(&mut self) {
         self.networking.server_state = ServerState::Disconnected;
         if let ServerState::Connected(stream) = &self.networking.server_state {
@@ -72,91 +73,38 @@ impl Client {
     pub fn handle_msgs(
         &mut self,
         messages: Arc<Mutex<Vec<String>>>,
-        // the reader thread gonna use channel senders, not network struct
+        // the reader thread gonna use channel senders, not network struct, so take ownership
         channel_senders: ChannelSenders,
     ) -> io::Result<()> {
         if let ServerState::Connected(stream) = &self.networking.server_state {
-            let mut cloned_stream = stream.try_clone()?;
+            let cloned_stream = stream.try_clone()?;
+            // Bufreader gonna store what it reads into a buffer, with that buffer you can perform mutiple operations
+            // the std libray said that Bufreader can prove the speed of my prgoram if i have small(socket content)
+            //and repeated read calls
+            let buffer = BufReader::new(cloned_stream);
             let cloned_messages = Arc::clone(&messages);
 
             let _received_client_msgs_thread_handler = thread::spawn(move || {
-                loop {
-                    let mut raw_message = [0; 1024];
-                    match cloned_stream.read(&mut raw_message) {
-                        Ok(0) => {
-                            let _ = channel_senders
-                                .server_state_tx
-                                .send(ServerState::Disconnected);
-                            break;
+                // this for loop will keep iterating until it founds EOF
+                // explanation: for loops gonna call next on every iteration, if calling next yeilds to None
+                //then break. in our case, it'll appear if EOF happen
+                for line in buffer.lines() {
+                    match line {
+                        Ok(line) => {
+                            handle_server_msgs(
+                                line,
+                                &mut cloned_messages.lock_mutex(),
+                                &channel_senders,
+                            );
                         }
 
                         // on Windows, instead of reaturning Ok(0) like in linux when a stream is
                         //dead it will return Error with (Os error 10054) message
-                        Err(e) if e.raw_os_error() == Some(10054) =>{
+                        Err(e) if e.raw_os_error() == Some(10054) => {
                             let _ = channel_senders
                                 .server_state_tx
                                 .send(ServerState::Disconnected);
                             break;
-                        }
-
-                        Ok(bytes_read) => {
-                            let message_buffer: String = str::from_utf8(&raw_message[..bytes_read])
-                                .unwrap_or("")
-                                .to_string();
-
-                            let messages_lines: Vec<&str> = message_buffer.split('\n').collect();
-                            for line in messages_lines.iter() {
-                                let server_msg: Vec<&str> = line.splitn(4, ':').collect();
-                                match server_msg[..] {
-                                    ["server", "success", "valid_name", content] => {
-                                        let _ = channel_senders
-                                            .name_validation_tx
-                                            .send(NameValidation::Valid(content.to_string()));
-                                    }
-                                    ["server", "event", content] => {
-                                        let _ = channel_senders.new_message_tx.send(true);
-                                        let msg = format!("server: {content}");
-                                        cloned_messages.lock_mutex().push(msg);
-                                    }
-                                    ["server", "error", "reserved_name"] => {
-                                        let _ = channel_senders
-                                            .name_validation_tx
-                                            .send(NameValidation::Reserved);
-                                    }
-                                    ["server", "error", "used_name"] => {
-                                        let _ = channel_senders
-                                            .name_validation_tx
-                                            .send(NameValidation::Reserved);
-                                    }
-                                    ["server", "error", "empty_name"] => {
-                                        let _ = channel_senders
-                                            .name_validation_tx
-                                            .send(NameValidation::Reserved);
-                                    }
-                                    ["server", "error", "illegalchar", character] => {
-                                        if let Some(character) = character.chars().next() {
-                                            let _ = channel_senders
-                                                .name_validation_tx
-                                                .send(NameValidation::IllegalChar(character));
-                                        }
-                                    }
-                                    ["client", "chat", sender, content] if !content.is_empty() => {
-                                        let chat_message = format!("{sender}: {content}");
-
-                                        cloned_messages
-                                            .lock()
-                                            .unwrap_or_else(|e| e.into_inner())
-                                            .push(chat_message);
-                                        let _ = channel_senders.new_message_tx.send(true);
-                                    }
-                                    // ignore this case that could cuz from split('\n') method
-                                    [""] => {}
-                                    ref _uknown => {
-                                        //println!("[Warn]: unkown msg: {uknown:?}")
-                                    }
-                                }
-                            }
-                            let _ = channel_senders.new_message_tx.send(true);
                         }
 
                         Err(e) => {
@@ -165,8 +113,72 @@ impl Client {
                         }
                     }
                 }
+
+                // if calling next on buffer.lines() yields to None (means EOF), then the for loop will break
+                let _ = channel_senders
+                    .server_state_tx
+                    .send(ServerState::Disconnected);
             });
         }
         Ok(())
+    }
+}
+
+fn handle_server_msgs(msg: String, messages: &mut Vec<String>, channel_senders: &ChannelSenders) {
+    match ServerMessage::deserialize(msg.clone()) {
+        // handling invalid name
+        ServerMessage::InvalidName(NameValidation::Empty) => {
+            let _ = channel_senders
+                .name_validation_tx
+                .send(NameValidation::Empty);
+        }
+        ServerMessage::InvalidName(NameValidation::Used) => {
+            let _ = channel_senders
+                .name_validation_tx
+                .send(NameValidation::Used);
+        }
+        ServerMessage::InvalidName(NameValidation::Reserved) => {
+            let _ = channel_senders
+                .name_validation_tx
+                .send(NameValidation::Reserved);
+        }
+        ServerMessage::InvalidName(NameValidation::IllegalChar(c)) => {
+            let _ = channel_senders
+                .name_validation_tx
+                .send(NameValidation::IllegalChar(c));
+        }
+
+        ServerMessage::ValidName(name) => {
+            let _ = channel_senders
+                .name_validation_tx
+                .send(NameValidation::Valid(name));
+        }
+
+        ServerMessage::Chat { sender, content } => {
+            let chat_message = format!("{sender}: {content}");
+
+            messages.push(chat_message);
+            let _ = channel_senders.new_message_tx.send(true);
+        }
+
+        // handling events messages
+        ServerMessage::ClientConnected(client_name) => {
+            let _ = channel_senders.new_message_tx.send(true);
+            let msg = format!("server: {client_name} connected!");
+            messages.push(msg);
+        }
+        // NOTE for now i don't know where i am handling other client disconnected msg
+        ServerMessage::ClientDisconnected(client_name) => {
+            let msg = format!("server: {client_name} disconnected!");
+            messages.push(msg);
+        }
+
+        ServerMessage::Unknown(_msg) => {
+            //dbg!(&_msg);
+        }
+        _ => unreachable!(
+            "caller should not invoke ServerMessage::History, it doesn't
+            have any deserialization"
+        ),
     }
 }
