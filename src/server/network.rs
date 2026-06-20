@@ -1,10 +1,9 @@
-use crate::server::name_validation::check_name_validity;
-use crate::server::server_messages::ServerMessage;
-use crate::shared_utils::{LockClean, NameValidation};
+use super::name_validation::check_name_validity;
+use crate::shared_utils::{LockClean, NameValidation, ServerMessage};
 
 use std::{
     collections::HashMap,
-    io::{ Read, Write, Result},
+    io::{Read, Result, Write},
     net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
     sync::{Arc, Mutex},
     thread::{self},
@@ -60,18 +59,19 @@ impl Server {
         let _ = client.write_all(msg.as_bytes());
     }
 
-    fn _sending_sample_msgs(stream: &mut TcpStream) {
+    // NOTE BUG: i get a bug on client side, i can't scroll up, only in a few seconds
+    fn _sending_sample_msgs(msgs: &mut Vec<String>) {
         let mut vec_of_messages = Vec::new();
-        let num_of_sample_msgs = 20;
+        let num_of_samples = 100;
 
-        for i in 0..=num_of_sample_msgs {
-            let sample_message = i.to_string() + ":Server";
+        for i in 0..=num_of_samples {
+            let sample_message = format!("client:chat:server:{i} a message");
             vec_of_messages.push(sample_message);
         }
 
-        for sample_message in vec_of_messages.iter() {
-            let msg_to_broadcast = format!("{}\n", sample_message.to_owned());
-            let _ = stream.write_all(msg_to_broadcast.as_bytes());
+        for sample_message in vec_of_messages {
+            let msg_to_broadcast = format!("{}", sample_message);
+            msgs.push(msg_to_broadcast);
         }
         println!("[Log]:samples messages have being sent to all clients succesfully",);
     }
@@ -117,7 +117,7 @@ impl Server {
                                             );
 
                                             cloned_messages.lock_mutex().push(format!(
-                                                "server:event:{client_name} disconnected"
+                                                "server:event:client_disconnected:{client_name}"
                                             ));
 
                                             Server::broadcast(
@@ -144,8 +144,9 @@ impl Server {
                                                 .serialize(),
                                             );
 
+                                            // NOTE why i didn't use ServerMessage ?
                                             cloned_messages.lock_mutex().push(format!(
-                                                "server:event:{client_name} disconnected"
+                                                "server:event:client_disconnected:{client_name}"
                                             ));
 
                                             Server::broadcast(
@@ -222,18 +223,25 @@ impl Server {
                                                     ref msg @ ServerMessage::ValidName(
                                                         ref client_name,
                                                     ) => {
+                                                        // NOTE why i didn't use ServerMessage serialization here?
                                                         let new_connection_msg = format!(
-                                                            "server:event:{client_name} connected"
+                                                            "server:event:client_connected:{client_name}"
                                                         );
                                                         cloned_messages
                                                             .lock_mutex()
                                                             .push(new_connection_msg.clone());
+
+                                                        // sending sample of msgs
+                                                        //Server::_sending_sample_msgs(
+                                                        //    &mut cloned_messages.lock_mutex(),
+                                                        //);
 
                                                         Server::broadcast(
                                                             &mut cloned_clients.lock_mutex(),
                                                             &new_connection_msg,
                                                         );
 
+                                                        // append this new client to clients collection
                                                         cloned_clients.lock_mutex().insert(
                                                             client_name.to_string(),
                                                             cloned_stream.try_clone()?,
