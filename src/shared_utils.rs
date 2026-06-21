@@ -23,6 +23,7 @@ pub enum ServerMessage {
     InvalidName(NameValidation),
 }
 
+#[derive(Debug)]
 pub enum ClientMessage {
     Unknown(String),
     CheckName(String),

@@ -27,12 +27,14 @@ impl Server {
 
     pub fn broadcast(clients: &mut HashMap<String, TcpStream>, server_msg: &ServerMessage) {
         match server_msg {
-            server_msg @ ServerMessage::Chat { sender, .. } => {
+            server_msg @ ServerMessage::Chat { sender, content } => {
+                println!("[Info] {sender} message is : \"{content}\"");
                 for (client_name, client_stream) in clients.iter_mut() {
                     if sender != client_name {
                         let _ = client_stream.write_all(server_msg.serialize().as_bytes());
                     }
                 }
+                println!("[Info] broadcasting \"{sender}\" message\n");
             }
 
             server_msg @ _ => {
@@ -55,22 +57,28 @@ impl Server {
             if requested_name == other_client_name {
                 server_msg = ServerMessage::InvalidName(NameValidation::Used);
                 is_client_name_reserved = true;
+                println!("[Error] client name is been used by other client");
             }
         }
 
         if !is_client_name_reserved {
             if requested_name.eq_ignore_ascii_case("server") {
+                println!("[Error] client name used a reserved name: {requested_name}");
                 server_msg = ServerMessage::InvalidName(NameValidation::Reserved)
             } else if requested_name.is_empty() {
+                println!("[Error] client name submit an empty name");
                 server_msg = ServerMessage::InvalidName(NameValidation::Empty)
             } else if requested_name.contains(':') {
+                println!("[Error] client name have IllegalChar \":\"");
                 server_msg = ServerMessage::InvalidName(NameValidation::IllegalChar(':'))
             } else {
+                println!("[Info] name accepted");
                 server_msg = ServerMessage::ValidName(requested_name.to_string())
             };
         }
 
         Server::send_to_one_client(stream, &server_msg.serialize());
+        println!("[Info] sending to {requested_name} name accepted\n");
 
         return server_msg;
     }
@@ -82,7 +90,10 @@ impl Server {
         stream: &mut TcpStream,
     ) -> Result<()> {
         let new_connection_msg = ServerMessage::ClientConnected(client_name.to_owned());
+        println!("[Info] new connection event from \"{client_name}\"");
         Server::broadcast(clients, &new_connection_msg);
+        println!("[Info] broadcasting new connection event\n");
+
         messages.push(new_connection_msg.serialize());
 
         // sending sample of msgs
@@ -92,11 +103,13 @@ impl Server {
 
         // append this new client to clients collection
         clients.insert(client_name.to_owned(), stream.try_clone()?);
+        println!("[Info] appending \"{client_name}\" to clients collection\n");
 
         Server::send_to_one_client(
             stream,
             &ServerMessage::History(messages.to_owned()).serialize(),
         );
+        println!("[Info] sending to \"{client_name}\" messages history");
 
         Ok(())
     }
@@ -113,10 +126,12 @@ impl Server {
 
             messages.push(ServerMessage::ClientDisconnected(client_name.to_owned()).serialize());
 
+            println!("[Info] disconnection event from \"{client_name}\"");
             Server::broadcast(
                 clients,
                 &ServerMessage::ClientDisconnected(client_name.to_owned()),
             );
+            println!("[Info] broadcasting disconnection event message\n");
         }
     }
 
@@ -139,7 +154,7 @@ impl Server {
             let msg_to_broadcast = format!("{}", sample_message);
             msgs.push(msg_to_broadcast);
         }
-        println!("[Log]:samples messages have being sent to all clients succesfully",);
+        println!("[Info] samples messages have being sent to all clients succesfully",);
     }
 
     pub fn bind_addr(&mut self) -> Result<()> {
@@ -151,7 +166,7 @@ impl Server {
     pub fn run(&mut self) -> Result<()> {
         if let Some(listener) = &mut self.listener {
             for stream in listener.incoming() {
-                println!("[Log]:new connection");
+                println!("[Info] new connection\n");
                 // using match and not using propagation because if one client get me an error and propagate it,
                 //the whole server will shutdown, and that's bad
                 match stream {
@@ -170,11 +185,18 @@ impl Server {
                             for line in buffer.lines() {
                                 match line {
                                     Ok(client_msg) => {
+                                        println!(
+                                            "[Info] get detailed message from client: {client_msg}"
+                                        );
                                         // check client name validation
                                         let client_msg = ClientMessage::deserialize(&client_msg);
+                                        println!(
+                                            "[Info] detailed message after deserialization : {client_msg:?}"
+                                        );
 
                                         match client_msg {
                                             ClientMessage::CheckName(ref requested_client_name) => {
+                                                println!("[Info] checking if the requested name is valid");
                                                 // check name validity
                                                 let clients_names: Vec<String> = cloned_clients
                                                     .lock_mutex()
@@ -221,12 +243,16 @@ impl Server {
                                                     &mut cloned_clients.lock_mutex(),
                                                     &server_msg,
                                                 );
-
-                                                dbg!(&cloned_messages);
                                             }
 
                                             ClientMessage::Unknown(unknown_msg) => {
-                                                println!("[Info] Unknown_msg: {unknown_msg}");
+                                                if let Some(ref client_name) = client_name {
+                                                    println!(
+                                                        "[Info] Unknown msg from \"{client_name}\" : {unknown_msg}"
+                                                    );
+                                                } else {
+                                                    println!("[Info] Unknown msg : {unknown_msg}");
+                                                }
                                             }
                                         }
                                     }
