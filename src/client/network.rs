@@ -62,7 +62,7 @@ impl Client {
     }
 
     // if not use shutdown method and just "close the ratatui context", it will sent an error of
-    //client program crushes (os error 104), don't know if same error for both linux and windows
+    //client program crashes (os error 104), don't know if same error for both linux and windows
     pub fn disconnected(&mut self) {
         self.networking.server_state = ServerState::Disconnected;
         if let ServerState::Connected(stream) = &self.networking.server_state {

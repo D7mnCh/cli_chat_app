@@ -1,13 +1,12 @@
 use super::{
-    channels::{ChannelReceivers, create_channels},
-    client_messages::ClientMessages,
+    channels::{create_channels, ChannelReceivers},
     network::{Client, ServerState},
     ui::{InputMode, InputState, RenderingEvents, Ui},
 };
 
 use crate::{
     client::ui::{TERMINAL_HEIGHT, TERMINAL_WIDTH},
-    shared_utils::{LockClean, NameValidation},
+    shared_utils::{ClientMessage, LockClean, NameValidation},
 };
 
 use std::{
@@ -62,7 +61,7 @@ impl App {
     fn handle_enter_name(&mut self) {
         self.client.name = self.ui.input.buffer.clone();
 
-        let serialized_msg = ClientMessages::CheckName(self.client.name.clone()).serialize();
+        let serialized_msg = ClientMessage::CheckName(self.client.name.clone()).serialize();
         self.client.networking.send_to_server(&serialized_msg);
 
         match self
@@ -120,7 +119,7 @@ impl App {
         self.ui.updating_max_scroll_pos();
         self.ui.vertical_scrolling.last();
 
-        let serialized_msg = ClientMessages::Chat {
+        let serialized_msg = ClientMessage::Chat {
             sender: self.client.name.clone(),
             content: self.ui.input.buffer.clone(),
         }
@@ -140,7 +139,8 @@ impl App {
     fn check_if_window_size_acceptable(&mut self, frame: &Frame) {
         if frame.area().width < TERMINAL_WIDTH || frame.area().height < TERMINAL_HEIGHT {
             self.ui.rendering_events = Some(RenderingEvents::MustResizingWarrning);
-        }    }
+        }
+    }
 
     // response to that event by changing states
     fn event_response(&mut self) {

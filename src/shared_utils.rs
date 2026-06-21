@@ -11,7 +11,7 @@ pub enum NameValidation {
 }
 
 // This struct is not for message delivery, so no writing to streams or reading of course
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ServerMessage {
     Unknown(String),
     ValidName(String),
@@ -21,6 +21,45 @@ pub enum ServerMessage {
     Chat { sender: String, content: String },
 
     InvalidName(NameValidation),
+}
+
+pub enum ClientMessage {
+    Unknown(String),
+    CheckName(String),
+    Chat { sender: String, content: String },
+}
+
+impl ClientMessage {
+    pub fn deserialize(msg: &String) -> ClientMessage {
+        let msg: Vec<&str> = msg.splitn(4, ':').collect();
+        match msg[..] {
+            ["client", "request", "name", client_name] => Self::CheckName(client_name.to_string()),
+            ["client", "chat", sender, content] => Self::Chat {
+                sender: sender.to_string(),
+                content: content.to_string(),
+            },
+            ref unknown => {
+                let sliced_msg = unknown.iter();
+                let mut string_msg = String::new();
+                for str_msg in sliced_msg {
+                    string_msg.push_str(str_msg);
+                }
+                Self::Unknown(string_msg)
+            }
+        }
+    }
+
+    pub fn serialize(&self) -> String {
+        match self {
+            Self::CheckName(client_name) => {
+                format!("client:request:name:{client_name}\n")
+            }
+            Self::Chat { sender, content } => format!("client:chat:{sender}:{content}\n"),
+            Self::Unknown(_unknown_msg) => {
+                unreachable!("the caller must not invoke those variant on the client side")
+            }
+        }
+    }
 }
 
 impl ServerMessage {
@@ -36,7 +75,7 @@ impl ServerMessage {
                 if let Some(character) = character.chars().next() {
                     return Self::InvalidName(NameValidation::IllegalChar(character));
                 } else {
-                    // i'll return ":" as the deafult (for now)
+                    // NOTE  i'll return ":" as the deafult (for now)
                     return Self::InvalidName(NameValidation::IllegalChar(':'));
                 }
             }
@@ -84,7 +123,7 @@ impl ServerMessage {
                     format!("server:error:illegalchar:{c}\n")
                 }
                 _ => unreachable!(
-                    "caller should not call ValidName when invoking InvalidName variant of ServerMessage enum "
+                    "caller should not call ValidName variant when invoking InvalidName variant"
                 ),
             },
 
@@ -111,7 +150,7 @@ impl ServerMessage {
             }
 
             Self::Unknown(_msg) => {
-                unreachable!("the caller must not invoke those variant on the server side")
+                unreachable!("the caller must not invoke this variant on the server side")
             }
         }
     }
