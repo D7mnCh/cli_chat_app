@@ -18,9 +18,10 @@ cargo run --bin --release client
 ```
 > ⚠️ for now, clients must be on the same Wifi in able to connect, so i didn't make server runs on the cloud fro global connections
 # Screenshots
-## TODO
-- you can use vhs video recorder on the terminal (optional)
-- gif is better
+- server side
+![Alt text](/screenshots/running-server.png)
+- client side
+![Alt text](/screenshots/running-client.png)
 
 # what i learn from building this project
 ## Netowrking/concurrency Concepts
@@ -54,11 +55,14 @@ cargo run --bin --release client
 ## On client side
 ### Ui
 #### Features to add
+ - use writeln!, so when serialization no need to append "\n" at the end of the returned string
  - when run server let user input ip address
  - waiting room ui to check if server is running
  - i need logging in ratatui context, if i use stdout it broke the ui
  - make logs on popout window (see ratatui examples)
 ### Not Ui:
+#### Features to add
+ - use writeln!, so when serialization no need to append "\n" at the end of the returned string
 #### Issues
  - redesigning network.rs
  - (Access is denied. (os error 5)) i get this error on windows when i try to connect, and disappear if i restart the server
@@ -72,3 +76,4 @@ cargo run --bin --release client
 - bind server to the cloud, so other clients from differnt Wifi can connect
     - https://developers.cloudflare.com/cloudflare-one/access-controls/applications/non-http/cloudflared-authentication/arbitrary-tcp/
 - use JSON with serde or make your own JSON parsing
+- impl encryption on messages
