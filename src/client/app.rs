@@ -24,7 +24,7 @@ pub struct App {
     client: Client,
     messages: Arc<Mutex<Vec<String>>>,
     // Option cuz i can't build Receiver<T> with Sender<T> on app's new method
-    // NOTE i only get the use of the option when creating the instances, other than that,
+    // i only get the use of the option when creating the instances, other than that,
     // it alawys will be Some(channel_receiver)
     channel_receivers: Option<ChannelReceivers>,
     is_running: bool,
@@ -59,6 +59,11 @@ impl App {
     }
 
     fn handle_enter_name(&mut self) {
+        if self.ui.input.buffer.is_empty() || self.ui.input.buffer.trim().is_empty() {
+            self.ui.input.clear();
+            return;
+        }
+
         self.client.name = self.ui.input.buffer.clone();
 
         let serialized_msg = ClientMessage::CheckName(self.client.name.clone()).serialize();
@@ -67,14 +72,15 @@ impl App {
         match self
             .channel_receivers
             .as_ref()
-            .unwrap()
+            .expect("channels should be init before the app start")
             .name_validation_rx
             .recv()
             .expect("[Error]:the reader thread get killed")
         {
-            NameValidation::Empty => {
-                self.ui.rendering_events =
-                    Some(RenderingEvents::NameValidationError(NameValidation::Empty))
+            NameValidation::Unknown => {
+                self.ui.rendering_events = Some(RenderingEvents::NameValidationError(
+                    NameValidation::Unknown,
+                ))
             }
             NameValidation::Reserved => {
                 self.ui.input.clear();

@@ -204,8 +204,8 @@ impl Ui {
             NameValidation::Reserved => Paragraph::new("Name used by server").centered().block(
                 Block::bordered().title_top(Line::from("Reserved name").centered().yellow()),
             ),
-            NameValidation::Empty => Paragraph::new("No name entered")
-                .block(Block::bordered().title_top(Line::from("Invalid name").centered().yellow()))
+            NameValidation::Unknown => Paragraph::new("requested name failed, retry")
+                .block(Block::bordered().title_top(Line::from("Unknown name").centered().yellow()))
                 .centered(),
             NameValidation::Used => Paragraph::new("Other user is using this name")
                 .block(Block::bordered().title_top(Line::from("Used name").centered().yellow()))

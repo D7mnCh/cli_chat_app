@@ -1,5 +1,6 @@
 use super::channels::ChannelSenders;
 use crate::shared_utils::{LockClean, NameValidation, ServerMessage};
+
 use std::io::{BufRead, BufReader};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::{
@@ -127,10 +128,10 @@ impl Client {
 fn handle_server_msgs(msg: String, messages: &mut Vec<String>, channel_senders: &ChannelSenders) {
     match ServerMessage::deserialize(msg.clone()) {
         // handling invalid name
-        ServerMessage::InvalidName(NameValidation::Empty) => {
+        ServerMessage::InvalidName(NameValidation::Unknown) => {
             let _ = channel_senders
                 .name_validation_tx
-                .send(NameValidation::Empty);
+                .send(NameValidation::Unknown);
         }
         ServerMessage::InvalidName(NameValidation::Used) => {
             let _ = channel_senders

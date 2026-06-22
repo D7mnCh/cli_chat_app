@@ -51,11 +51,11 @@ impl Server {
         clients_names: &[String],
     ) -> ServerMessage {
         let mut is_client_name_reserved = false;
-        let mut server_msg: ServerMessage = ServerMessage::InvalidName(NameValidation::Empty);
+        let mut server_msg: Option<ServerMessage> = None;
 
         for other_client_name in clients_names.iter() {
             if requested_name == other_client_name {
-                server_msg = ServerMessage::InvalidName(NameValidation::Used);
+                server_msg = Some(ServerMessage::InvalidName(NameValidation::Used));
                 is_client_name_reserved = true;
                 println!("[Error] client name is been used by other client");
             }
@@ -64,23 +64,24 @@ impl Server {
         if !is_client_name_reserved {
             if requested_name.eq_ignore_ascii_case("server") {
                 println!("[Error] client name used a reserved name: {requested_name}");
-                server_msg = ServerMessage::InvalidName(NameValidation::Reserved)
-            } else if requested_name.is_empty() {
-                println!("[Error] client name submit an empty name");
-                server_msg = ServerMessage::InvalidName(NameValidation::Empty)
+                server_msg = Some(ServerMessage::InvalidName(NameValidation::Reserved))
             } else if requested_name.contains(':') {
                 println!("[Error] client name have IllegalChar \":\"");
-                server_msg = ServerMessage::InvalidName(NameValidation::IllegalChar(':'))
+                server_msg = Some(ServerMessage::InvalidName(NameValidation::IllegalChar(':')))
             } else {
                 println!("[Info] name accepted");
-                server_msg = ServerMessage::ValidName(requested_name.to_string())
+                server_msg = Some(ServerMessage::ValidName(requested_name.to_string()))
             };
         }
 
-        Server::send_to_one_client(stream, &server_msg.serialize());
-        println!("[Info] sending to {requested_name} name accepted\n");
+        if let Some(server_msg) = server_msg {
+            Server::send_to_one_client(stream, &server_msg.clone().serialize());
+            println!("[Info] sending to {requested_name} name accepted\n");
 
-        return server_msg;
+            return server_msg;
+        }
+
+        return ServerMessage::InvalidName(NameValidation::Unknown);
     }
 
     fn handle_valid_name(

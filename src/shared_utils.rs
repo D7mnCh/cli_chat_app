@@ -2,7 +2,7 @@ use std::sync::{Mutex, MutexGuard};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum NameValidation {
-    Empty,
+    Unknown,
     Reserved,
     Used,
     IllegalChar(char),
@@ -71,7 +71,9 @@ impl ServerMessage {
             // handle invalid name
             ["server", "error", "reserved_name"] => Self::InvalidName(NameValidation::Reserved),
             ["server", "error", "used_name"] => Self::InvalidName(NameValidation::Used),
-            ["server", "error", "empty_name"] => Self::InvalidName(NameValidation::Empty),
+            ["server", "error", "unknown_requested_name"] => {
+                Self::InvalidName(NameValidation::Unknown)
+            }
             ["server", "error", "illegalchar", character] => {
                 if let Some(character) = character.chars().next() {
                     return Self::InvalidName(NameValidation::IllegalChar(character));
@@ -91,7 +93,7 @@ impl ServerMessage {
                 Self::ClientDisconnected(client_name.to_string())
             }
 
-            ["client", "chat", sender, content] if !content.is_empty() => Self::Chat {
+            ["client", "chat", sender, content] => Self::Chat {
                 sender: sender.to_string(),
                 content: content.to_string(),
             },
@@ -117,8 +119,8 @@ impl ServerMessage {
                 NameValidation::Reserved => {
                     format!("server:error:reserved_name\n")
                 }
-                NameValidation::Empty => {
-                    format!("server:error:empty_name\n")
+                NameValidation::Unknown => {
+                    format!("server:error:unknown_requested_name\n")
                 }
                 NameValidation::IllegalChar(c) => {
                     format!("server:error:illegalchar:{c}\n")
