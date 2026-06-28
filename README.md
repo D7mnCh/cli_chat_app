@@ -1,5 +1,7 @@
 # cli_chat_app
-- cli_chat_app (as it name said) it is a chat app that runs on the terminal, it uses rust and ratatui crate(library), it uses TcpStream and TcpListener as it based for networking from rust std
+- cli_chat_app (as it name said) a chat app that runs on the terminal, built with rust lang and ratatui (a Tui library)
+- the app networking implemented using TcpStream and TcpListener from rust stand library
+- implemented very basic parsing for client-server messages
 - it have been tested on both linux and windows (not tested on macos)
 # Usage
 - install rust first
