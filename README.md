@@ -1,7 +1,7 @@
 # cli_chat_app
 - cli_chat_app (as it name said) a chat app that runs on the terminal, built with rust lang and ratatui (a Tui library)
-- the app networking implemented using TcpStream and TcpListener from rust stand library
-- implemented very basic parsing for client-server messages
+- the app networking implemented using TcpStream and TcpListener from rust standard library
+- implemented very basic parsing for both client/server messages
 - it have been tested on both linux and windows (not tested on macos)
 # Usage
 - install rust first
@@ -9,7 +9,8 @@
 curl --proto '=https' --tlsv1.2 https://sh.rustup.rs -sSf | sh
 ```
 - clone this rep
-> ⚠️ if you get "No such file or directory", you working direcotry must be on where `Cargo.toml` is
+> [!WARNING]
+> if you get "No such file or directory", you working direcotry must be on where `Cargo.toml` is
 ## to run the server
 ```bash
 cargo run --bin --release server
@@ -18,7 +19,8 @@ cargo run --bin --release server
 ```bash
 cargo run --bin --release client
 ```
-> ⚠️ for now, clients must be on the same Wifi in able to connect, so i didn't make server runs on the cloud fro global connections
+> [!WARNING]
+>  for now, clients must be on the same Wifi in able to connect, so i didn't make server runs on the cloud fro global connections
 # Screenshots
 - server side
 ![Alt text](/screenshots/running-server.png)
@@ -74,8 +76,8 @@ cargo run --bin --release client
  - retry connection
 
 ## big moves
-- switch to using async 
-- bind server to the cloud, so other clients from differnt Wifi can connect
+- introduce async 
+- bind server to the cloud, so other clients from differnt Wifi can connect to the same server
     - https://developers.cloudflare.com/cloudflare-one/access-controls/applications/non-http/cloudflared-authentication/arbitrary-tcp/
 - use JSON with serde or make your own JSON parsing
 - impl encryption on messages
